@@ -28,6 +28,7 @@ import empTaskRoutes       from "./routes/Emptask.routes.js";
 import empDashboardRoutes  from "./routes/Empdashboard.routes.js";
 import blockedAppRoutes    from "./routes/blockedApp.routes.js";
 import emailVerifyRoutes  from "./routes/emailVerify.routes.js";
+
 dotenv.config();
 
 const app    = express();
@@ -35,12 +36,18 @@ const server = http.createServer(app);
 
 dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
-// ── CORS — allow localhost + Chrome extensions ────────────────
+// ── CORS — allow localhost + Vercel frontend + Chrome extensions ──
 app.use(cors({
   origin: function (origin, callback) {
+    const allowed = [
+      "https://workforce-productivity-5163.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "http://localhost:5000",
+    ];
     if (
       !origin ||
-      origin.startsWith("http://localhost") ||
+      allowed.includes(origin) ||
       origin.startsWith("http://127.0.0.1") ||
       origin.startsWith("chrome-extension://")
     ) {
@@ -90,6 +97,7 @@ const startServer = async () => {
     app.use("/api/emp", empTaskRoutes);
     app.use("/api/emp", empDashboardRoutes);
     app.use("/api/verify-email", emailVerifyRoutes);
+
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);

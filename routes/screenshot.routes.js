@@ -1,5 +1,5 @@
 import express from "express";
-import Screenshot from "../models/Screenshot.js";
+import Screenshot from "../models/screenshot.js";
 import { protect } from "../middleware/auth.middleware.js";
 import { createAlertFromScreenshot } from "../controllers/alert.controller.js";
 

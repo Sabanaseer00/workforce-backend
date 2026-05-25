@@ -4,7 +4,7 @@
 import Settings  from "../models/Settings.js";
 import Employee  from "../models/Employee.js";
 import Alert     from "../models/Alert.js";
-import Screenshot from "../models/screenshot.js";
+import Screenshot from "../models/Screenshot.js";
 
 // Social app id → domain map
 const SOCIAL_DOMAINS = {

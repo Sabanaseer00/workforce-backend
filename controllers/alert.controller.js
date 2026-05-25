@@ -1,5 +1,5 @@
 import Alert from "../models/Alert.js";
-import Screenshot from "../models/screenshot.js";
+import Screenshot from "../models/Screenshot.js";
 
 const BLOCKED_APPS = [
   "youtube","facebook","tiktok","instagram",

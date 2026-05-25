@@ -2,7 +2,7 @@ import Settings from "../models/Settings.js";
 import Employee from "../models/Employee.js";
 import User from "../models/User.js";
 import bcrypt from "bcryptjs";
-import Screenshot from "../models/screenshot.js";
+import Screenshot from "../models/Screenshot.js";
 import Alert from "../models/Alert.js";
 
 // ✅ GET SETTINGS

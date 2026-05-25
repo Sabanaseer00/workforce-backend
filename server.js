@@ -1,0 +1,107 @@
+import express from "express";
+import dotenv from "dotenv";
+import cors from "cors";
+import http from "http";
+import cookieParser from "cookie-parser";
+import dns from "dns";
+import { connectDB } from "./config/db.js";
+import { initSocket } from "./config/socket.js";
+import burnoutRoutes   from "./routes/burnout.routes.js";
+// ── Admin Routes ──────────────────────────────────────────────
+import authRoutes       from "./routes/auth.routes.js";
+import taskRoutes       from "./routes/task.routes.js";
+import employeeRoutes   from "./routes/employee.routes.js";
+import activityRoutes   from "./routes/activity.routes.js";
+import screenshotRoutes from "./routes/screenshot.routes.js";
+import reportRoutes     from "./routes/report.routes.js";
+import settingsRoutes   from "./routes/settings.routes.js";
+import dashboardRoutes  from "./routes/dashboard.routes.js";
+import alertRoutes      from "./routes/alert.routes.js";
+import privacyRoutes    from "./routes/privacy.routes.js";
+import blockingRoutes   from "./routes/blocking.routes.js";
+// ── Employee Portal Routes (/api/emp) ─────────────────────────
+import empActivityRoutes   from "./routes/empActivity.routes.js";
+import empScreenshotRoutes from "./routes/empScreenshot.routes.js";
+import empWorkHoursRoutes  from "./routes/empWorkHours.routes.js";
+import empProfileRoutes    from "./routes/empProfile.routes.js";
+import empTaskRoutes       from "./routes/empTask.routes.js";
+import empDashboardRoutes  from "./routes/empDashboard.routes.js";
+import blockedAppRoutes    from "./routes/blockedApp.routes.js";
+import emailVerifyRoutes  from "./routes/emailVerify.routes.js";
+dotenv.config();
+
+const app    = express();
+const server = http.createServer(app);
+
+dns.setServers(["1.1.1.1", "8.8.8.8"]);
+
+// ── CORS — allow localhost + Chrome extensions ────────────────
+app.use(cors({
+  origin: function (origin, callback) {
+    if (
+      !origin ||
+      origin.startsWith("http://localhost") ||
+      origin.startsWith("http://127.0.0.1") ||
+      origin.startsWith("chrome-extension://")
+    ) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  credentials: true,
+}));
+
+app.use(express.json({ limit: "10mb" }));
+app.use(cookieParser());
+
+app.get("/", (req, res) => {
+  res.json({ message: "🚀 API is running" });
+});
+
+const startServer = async () => {
+  try {
+    await connectDB();
+    console.log("✅ Database Connected Successfully");
+
+    const ioInstance = initSocket(server);
+    app.set("io", ioInstance);
+
+    // ── Admin Routes ──────────────────────────────────────────
+    app.use("/api/auth",         authRoutes);
+    app.use("/api/tasks",        taskRoutes);
+    app.use("/api/screenshots",  screenshotRoutes);
+    app.use("/api/reports",      reportRoutes);
+    app.use("/api/settings",     settingsRoutes);
+    app.use("/api/dashboard",    dashboardRoutes);
+    app.use("/api/alerts",       alertRoutes);
+    app.use("/api/employees",    activityRoutes);
+    app.use("/api/employees",    employeeRoutes);
+    app.use("/api/burnout",      burnoutRoutes);
+    app.use("/api/privacy",      privacyRoutes);
+    app.use("/api/blocking",     blockingRoutes);
+    app.use("/api/blocked-apps", blockedAppRoutes);
+
+    // ── Employee Portal Routes ────────────────────────────────
+    app.use("/api/emp", empActivityRoutes);
+    app.use("/api/emp", empScreenshotRoutes);
+    app.use("/api/emp", empWorkHoursRoutes);
+    app.use("/api/emp", empProfileRoutes);
+    app.use("/api/emp", empTaskRoutes);
+    app.use("/api/emp", empDashboardRoutes);
+    app.use("/api/verify-email", emailVerifyRoutes);
+    const PORT = process.env.PORT || 5000;
+    server.listen(PORT, () => {
+      console.log(`🚀 Server running on http://localhost:${PORT}`);
+    });
+
+  } catch (error) {
+    console.error("❌ Server failed to start:", error.message);
+    if (error.message.includes("bad auth"))           console.log("👉 MongoDB username/password issue");
+    if (error.message.includes("ENOTFOUND"))          console.log("👉 DNS / Cluster URL issue");
+    if (error.message.includes("Cannot find module")) console.log("👉 Missing file:", error.message);
+    process.exit(1);
+  }
+};
+
+startServer();

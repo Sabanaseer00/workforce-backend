@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════
 import express from "express";
 import { protect } from "../middleware/auth.middleware.js";
-import { getMyDashboard } from "../controllers/empDashboard.controller.js";
+import { getMyDashboard } from "../controllers/Empdashboard.controller.js";
 
 const router = express.Router();
 

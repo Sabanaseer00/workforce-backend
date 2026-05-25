@@ -5,7 +5,7 @@
 // ═══════════════════════════════════════════════════════
 import express from "express";
 import { protect } from "../middleware/auth.middleware.js";
-import { getMyProfile, updateMyProfile } from "../controllers/empProfile.controller.js";
+import { getMyProfile, updateMyProfile } from "../controllers/Empprofile.controller.js";
 
 const router = express.Router();
 

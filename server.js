@@ -20,12 +20,12 @@ import alertRoutes      from "./routes/alert.routes.js";
 import privacyRoutes    from "./routes/privacy.routes.js";
 import blockingRoutes   from "./routes/blocking.routes.js";
 // ── Employee Portal Routes (/api/emp) ─────────────────────────
-import empActivityRoutes   from "./routes/empActivity.routes.js";
-import empScreenshotRoutes from "./routes/empScreenshot.routes.js";
-import empWorkHoursRoutes  from "./routes/empWorkHours.routes.js";
-import empProfileRoutes    from "./routes/empProfile.routes.js";
-import empTaskRoutes       from "./routes/empTask.routes.js";
-import empDashboardRoutes  from "./routes/empDashboard.routes.js";
+import empActivityRoutes   from "./routes/Empactivity.routes.js";
+import empScreenshotRoutes from "./routes/Empscreenshot.routes.js";
+import empWorkHoursRoutes  from "./routes/Empworkhours.routes.js";
+import empProfileRoutes    from "./routes/Empprofile.routes.js";
+import empTaskRoutes       from "./routes/Emptask.routes.js";
+import empDashboardRoutes  from "./routes/Empdashboard.routes.js";
 import blockedAppRoutes    from "./routes/blockedApp.routes.js";
 import emailVerifyRoutes  from "./routes/emailVerify.routes.js";
 dotenv.config();

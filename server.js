@@ -7,7 +7,6 @@ import dns from "dns";
 import { connectDB } from "./config/db.js";
 import { initSocket } from "./config/socket.js";
 import burnoutRoutes   from "./routes/burnout.routes.js";
-// ── Admin Routes ──────────────────────────────────────────────
 import authRoutes       from "./routes/auth.routes.js";
 import taskRoutes       from "./routes/task.routes.js";
 import employeeRoutes   from "./routes/employee.routes.js";
@@ -19,7 +18,6 @@ import dashboardRoutes  from "./routes/dashboard.routes.js";
 import alertRoutes      from "./routes/alert.routes.js";
 import privacyRoutes    from "./routes/privacy.routes.js";
 import blockingRoutes   from "./routes/blocking.routes.js";
-// ── Employee Portal Routes (/api/emp) ─────────────────────────
 import empActivityRoutes   from "./routes/Empactivity.routes.js";
 import empScreenshotRoutes from "./routes/Empscreenshot.routes.js";
 import empWorkHoursRoutes  from "./routes/Empworkhours.routes.js";
@@ -27,7 +25,7 @@ import empProfileRoutes    from "./routes/Empprofile.routes.js";
 import empTaskRoutes       from "./routes/Emptask.routes.js";
 import empDashboardRoutes  from "./routes/Empdashboard.routes.js";
 import blockedAppRoutes    from "./routes/blockedApp.routes.js";
-import emailVerifyRoutes  from "./routes/emailVerify.routes.js";
+import emailVerifyRoutes   from "./routes/emailVerify.routes.js";
 
 dotenv.config();
 
@@ -36,10 +34,10 @@ const server = http.createServer(app);
 
 dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
-// ── CORS — allow localhost + Vercel frontend + Chrome extensions ──
 app.use(cors({
   origin: function (origin, callback) {
     const allowed = [
+      "https://workforce-frontend-ten.vercel.app",
       "https://workforce-productivity-5163.vercel.app",
       "http://localhost:5173",
       "http://localhost:3000",
@@ -74,7 +72,6 @@ const startServer = async () => {
     const ioInstance = initSocket(server);
     app.set("io", ioInstance);
 
-    // ── Admin Routes ──────────────────────────────────────────
     app.use("/api/auth",         authRoutes);
     app.use("/api/tasks",        taskRoutes);
     app.use("/api/screenshots",  screenshotRoutes);
@@ -89,7 +86,6 @@ const startServer = async () => {
     app.use("/api/blocking",     blockingRoutes);
     app.use("/api/blocked-apps", blockedAppRoutes);
 
-    // ── Employee Portal Routes ────────────────────────────────
     app.use("/api/emp", empActivityRoutes);
     app.use("/api/emp", empScreenshotRoutes);
     app.use("/api/emp", empWorkHoursRoutes);

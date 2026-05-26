@@ -39,6 +39,7 @@ app.use(cors({
     const allowed = [
       "https://workforce-frontend-ten.vercel.app",
       "https://workforce-productivity-5163.vercel.app",
+      "https://workforce-frontend-git-main-beenish-latifs-projects.vercel.app",
       "http://localhost:5173",
       "http://localhost:3000",
       "http://localhost:5000",

@@ -1,0 +1,25 @@
+{
+  "name": "screen-agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "active-win": "^8.2.1",
+    "axios": "^1.15.2",
+    "screenshot-desktop": "^1.0.0",
+    "sharp": "^0.34.5",
+    "socket.io-client": "^4.8.3",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "electron": "^41.3.0"
+  }
+}

@@ -1,0 +1,23 @@
+[1mdiff --git a/server.js b/server.js[m
+[1mindex 7f585a3..f433a87 100644[m
+[1m--- a/server.js[m
+[1m+++ b/server.js[m
+[36m@@ -20,12 +20,12 @@[m [mimport alertRoutes      from "./routes/alert.routes.js";[m
+ import privacyRoutes    from "./routes/privacy.routes.js";[m
+ import blockingRoutes   from "./routes/blocking.routes.js";[m
+ // ── Employee Portal Routes (/api/emp) ─────────────────────────[m
+[31m-import empActivityRoutes   from "./routes/empActivity.routes.js";[m
+[31m-import empScreenshotRoutes from "./routes/empScreenshot.routes.js";[m
+[31m-import empWorkHoursRoutes  from "./routes/empWorkHours.routes.js";[m
+[31m-import empProfileRoutes    from "./routes/empProfile.routes.js";[m
+[31m-import empTaskRoutes       from "./routes/empTask.routes.js";[m
+[31m-import empDashboardRoutes  from "./routes/empDashboard.routes.js";[m
+[32m+[m[32mimport empActivityRoutes   from "./routes/Empactivity.routes.js";[m
+[32m+[m[32mimport empScreenshotRoutes from "./routes/Empscreenshot.routes.js";[m
+[32m+[m[32mimport empWorkHoursRoutes  from "./routes/Empworkhours.routes.js";[m
+[32m+[m[32mimport empProfileRoutes    from "./routes/Empprofile.routes.js";[m
+[32m+[m[32mimport empTaskRoutes       from "./routes/Emptask.routes.js";[m
+[32m+[m[32mimport empDashboardRoutes  from "./routes/Empdashboard.routes.js";[m
+ import blockedAppRoutes    from "./routes/blockedApp.routes.js";[m
+ import emailVerifyRoutes  from "./routes/emailVerify.routes.js";[m
+ dotenv.config();[m

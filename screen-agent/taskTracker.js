@@ -1,29 +1,34 @@
 // taskAgent.js  —  Electron main process mein import karo
 // ✅ ALL BUGS FIXED:
-//   BUG 1 FIX: VITE_BACKEND_URL priority hata di — main process mein undefined hota hai
+//   BUG 1 FIX: Railway URL correctly set — Vercel URL hata di
 //   BUG 2 FIX: require("electron") ES module mein kaam nahi karta — pkg se powerMonitor lo
 //   BUG 3 FIX: axios dynamic import har ping pe nahi — top-level static import
 //   BUG 4 FIX: stopTaskAgent() me timer null check aur cleanup proper
+//   BUG 5 FIX: Retry logic + better error logging Railway ke liye
+//   BUG 6 FIX: Endpoint 404 hone par graceful fallback — heartbeat endpoint use karo
 
-// ✅ BUG 3 FIXED: Static import — dynamic import(axios) har 30s pe memory leak karta tha
 import axios from "axios";
 import pkg from "electron";
 
-// ✅ BUG 1 FIXED: VITE_ prefix hata diya — Electron main process mein VITE_ vars undefined hote hain
-// BACKEND_URL pehle check karo, VITE_ bilkul nahi
+// ✅ BUG 1 FIXED: Railway URL — VITE_ prefix hata diya (main process mein undefined hota hai)
 const BASE_URL =
   process.env.BACKEND_URL ||
-  "https://workforce-backend-dusky.vercel.app";
+  "https://workforce-backend-production-cc13.up.railway.app";
 
-const INTERVAL = 30 * 1000; // 30 seconds
+const INTERVAL         = 30 * 1000; // 30 seconds
+const IDLE_THRESHOLD   = 300;       // 5 minutes
+const REQUEST_TIMEOUT  = 10_000;    // 10 seconds
 
 console.log("[TaskAgent] Backend URL:", BASE_URL);
 
-let agentTimer  = null;
-let _employeeId = null;
-let _token      = null;
+let agentTimer      = null;
+let _employeeId     = null;
+let _token          = null;
+let _endpointWorks  = null; // null = untested, true = works, false = 404/failed
 
-// ── Active window title get karna (cross-platform) ──
+// ══════════════════════════════════════════════════════
+//  ACTIVE WINDOW
+// ══════════════════════════════════════════════════════
 async function getActiveWindow() {
   try {
     const activeWin = await import("active-win");
@@ -38,18 +43,94 @@ async function getActiveWindow() {
   }
 }
 
-// ✅ BUG 2 FIXED: require("electron") ES module mein crash karta hai
-// pkg (electron default export) se powerMonitor lo — yahi main.js mein bhi use hota hai
+// ══════════════════════════════════════════════════════
+//  IDLE DETECTION
+// ══════════════════════════════════════════════════════
 function isUserIdle() {
   try {
     const { powerMonitor } = pkg;
     const idleSecs = powerMonitor.getSystemIdleTime();
-    return idleSecs > 300; // 5 min
+    return idleSecs > IDLE_THRESHOLD;
   } catch {
     return false;
   }
 }
 
+// ══════════════════════════════════════════════════════
+//  AXIOS INSTANCE — Railway ke liye optimized
+// ══════════════════════════════════════════════════════
+function makeHeaders() {
+  return {
+    "Content-Type": "application/json",
+    ...(_token && { Authorization: `Bearer ${_token}` }),
+  };
+}
+
+// ══════════════════════════════════════════════════════
+//  ENDPOINT TEST — pehli baar check karo kya exist karta hai
+// ══════════════════════════════════════════════════════
+async function testAgentEndpoint() {
+  try {
+    // OPTIONS request se check karo (low cost)
+    await axios.options(`${BASE_URL}/api/tasks/agent/update`, {
+      timeout: 5000,
+    });
+    _endpointWorks = true;
+    console.log("[TaskAgent] ✅ /api/tasks/agent/update endpoint available");
+  } catch (err) {
+    const status = err?.response?.status;
+    if (status === 404 || status === undefined) {
+      _endpointWorks = false;
+      console.warn("[TaskAgent] ⚠️ /api/tasks/agent/update not found — heartbeat fallback use hoga");
+    } else {
+      // 405 Method Not Allowed = endpoint exists (OPTIONS nahi accept karta)
+      _endpointWorks = true;
+      console.log(`[TaskAgent] ✅ Endpoint exists (HTTP ${status})`);
+    }
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  PRIMARY PING — /api/tasks/agent/update
+// ══════════════════════════════════════════════════════
+async function pingAgentEndpoint(payload) {
+  const res = await axios.post(
+    `${BASE_URL}/api/tasks/agent/update`,
+    payload,
+    { headers: makeHeaders(), timeout: REQUEST_TIMEOUT }
+  );
+  const data = res.data;
+  if (data?.updated > 0) {
+    console.log(`[TaskAgent] ✅ ${data.updated} task(s) updated:`, data.changes);
+  } else {
+    console.log("[TaskAgent] ✅ Ping OK — no task updates");
+  }
+}
+
+// ══════════════════════════════════════════════════════
+//  FALLBACK PING — /api/employees/heartbeat
+//  (jab agent endpoint exist na kare Railway pe)
+// ══════════════════════════════════════════════════════
+async function pingHeartbeatFallback(payload) {
+  const res = await axios.post(
+    `${BASE_URL}/api/employees/heartbeat`,
+    {
+      employeeId:  payload.employeeId,
+      activeApp:   payload.activeApp,
+      windowTitle: payload.windowTitle,
+      mouseEvents: 0,
+      keyEvents:   0,
+      isRemote:    false,
+      vpnConnected: false,
+    },
+    { headers: makeHeaders(), timeout: REQUEST_TIMEOUT }
+  );
+  console.log("[TaskAgent] 💓 Heartbeat fallback OK:", res.status);
+}
+
+// ══════════════════════════════════════════════════════
+//  MAIN PING — endpoint test + smart routing
+// ══════════════════════════════════════════════════════
 async function pingServer() {
   if (!_employeeId) return;
 
@@ -63,67 +144,104 @@ async function pingServer() {
     isWorking:   !idle,
   };
 
-  try {
-    // ✅ BUG 3 FIXED: axios upar se import ho chuka hai — yahan seedha use karo
-    const res = await axios.post(
-      `${BASE_URL}/api/tasks/agent/update`,
-      payload,
-      {
-        headers: {
-          "Content-Type": "application/json",
-          ...(_token && { Authorization: `Bearer ${_token}` }),
-        },
-        timeout: 10000,
-      }
-    );
+  // Pehli baar endpoint test karo
+  if (_endpointWorks === null) {
+    await testAgentEndpoint();
+  }
 
-    const data = res.data;
-    if (data?.updated > 0) {
-      console.log(`[TaskAgent] ${data.updated} tasks updated:`, data.changes);
+  try {
+    if (_endpointWorks) {
+      await pingAgentEndpoint(payload);
+    } else {
+      await pingHeartbeatFallback(payload);
     }
   } catch (err) {
     const status = err?.response?.status;
     const msg    = err?.response?.data?.message || err.message;
+
+    // 404 mil gaya — fallback pe switch karo
+    if (status === 404 && _endpointWorks) {
+      console.warn("[TaskAgent] ⚠️ 404 received — switching to heartbeat fallback permanently");
+      _endpointWorks = false;
+      try {
+        await pingHeartbeatFallback(payload);
+      } catch (fallbackErr) {
+        console.error("[TaskAgent] ❌ Fallback bhi fail hua:", fallbackErr.message);
+      }
+      return;
+    }
+
+    // Railway cold start / timeout
+    if (err.code === "ECONNABORTED" || err.code === "ERR_NETWORK") {
+      console.warn(`[TaskAgent] ⏳ Railway cold start ya network issue — retry hoga 30s mein`);
+      return;
+    }
+
+    // ECONNREFUSED — Railway server down
+    if (err.code === "ECONNREFUSED") {
+      console.warn("[TaskAgent] 🔴 Railway server reachable nahi — check karo:", BASE_URL);
+      return;
+    }
+
     console.warn(
-      `[TaskAgent] Ping failed [${BASE_URL}] ${status ? `(HTTP ${status})` : "(network error)"}:`,
+      `[TaskAgent] Ping failed [${BASE_URL}] ${status ? `(HTTP ${status})` : `(${err.code || "network error"})`}:`,
       msg
     );
   }
 }
 
-// ✅ Token parameter — production auth ke liye zarori
+// ══════════════════════════════════════════════════════
+//  PUBLIC API
+// ══════════════════════════════════════════════════════
+
+/**
+ * Task agent start karo
+ * @param {string} employeeId
+ * @param {string} token  — JWT Bearer token
+ */
 export function startTaskAgent(employeeId, token) {
   if (!employeeId) {
     console.warn("[TaskAgent] employeeId nahi diya — agent start nahi hoga");
     return;
   }
 
-  // ✅ BUG 4 FIX: Agar pehle se chal raha hai to pehle band karo
+  // Pehle se chal raha hai to band karo
   if (agentTimer) {
     clearInterval(agentTimer);
     agentTimer = null;
   }
 
-  _employeeId = employeeId;
-  _token      = token || null;
+  _employeeId    = employeeId;
+  _token         = token || null;
+  _endpointWorks = null; // pehli ping pe fresh test hoga
 
+  // Pehla ping turant
   pingServer();
   agentTimer = setInterval(pingServer, INTERVAL);
-  console.log(`[TaskAgent] Started for employee: ${employeeId} → ${BASE_URL}`);
+
+  console.log(`[TaskAgent] 🟢 Started — employee: ${employeeId} → ${BASE_URL}`);
 }
 
-// ✅ BUG 4 FIXED: Proper cleanup — null checks aur state reset
+/**
+ * Task agent band karo — cleanup proper hai
+ */
 export function stopTaskAgent() {
   if (agentTimer) {
     clearInterval(agentTimer);
     agentTimer = null;
   }
-  _employeeId = null;
-  _token      = null;
-  console.log("[TaskAgent] Stopped");
+  _employeeId    = null;
+  _token         = null;
+  _endpointWorks = null;
+  console.log("[TaskAgent] ⏹ Stopped");
 }
 
+/**
+ * Employee update karo bina restart ke
+ */
 export function setTaskAgentEmployee(employeeId, token) {
   _employeeId = employeeId;
   if (token) _token = token;
+  _endpointWorks = null; // re-test karo
+  console.log(`[TaskAgent] 🔄 Employee updated: ${employeeId}`);
 }

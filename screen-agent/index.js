@@ -9,18 +9,17 @@ import fs from "fs";
 import { execSync } from "child_process";
 import { fileURLToPath } from "url";
 
-// ✅ BUG 4 FIXED: dotenv load karo — VITE_ prefix main process mein kaam nahi karta
 import { config } from "dotenv";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 config({ path: path.join(__dirname, ".env") });
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PRODUCTION CONFIG
+//  PRODUCTION CONFIG — Railway backend
 //  .env mein BACKEND_URL set karo (VITE_BACKEND_URL nahi)
 // ═══════════════════════════════════════════════════════════════════════
 const BACKEND  = process.env.BACKEND_URL
-              || "https://workforce-backend-dusky.vercel.app";
+              || "https://workforce-backend-production-cc13.up.railway.app";
 
 const FRONTEND = process.env.FRONTEND_URL
               || "https://your-frontend.vercel.app";
@@ -176,8 +175,6 @@ function isSystemIdle(title) {
   return SYSTEM_IDLE_WINDOWS.some(p => tl.includes(p));
 }
 
-// ✅ BUG 1 FIXED: ttApi ko pure async function banaya — await Promise constructor ke
-//    andar nahi ho sakta. http module bhi hata diya, seedha axios use karta hai.
 async function ttApi(apiPath, method = "GET", body = null) {
   const res = await axios({
     method:  method.toLowerCase(),
@@ -304,9 +301,8 @@ async function ttCheck() {
   } catch (e) { console.log("[TT] check error:", e.message); }
 }
 
-// ✅ BUG 3 NOTE: Socket.IO Vercel pe persistent connection nahi bana sakta.
-//    Agar backend Vercel pe hai to SOCKET_URL alag server (Railway/Render) ka
-//    set karo — warna socket silently fail hoga aur polling fallback kaam karega.
+// ✅ Socket — Railway pe WebSocket support karta hai (Vercel ke ulat)
+//    Railway pe persistent connections kaam karti hain
 async function ttSocketConnect() {
   try {
     let ioFn;
@@ -318,7 +314,7 @@ async function ttSocketConnect() {
       return;
     }
 
-    // ✅ Alag SOCKET_URL use karo agar available ho (Vercel ke liye zaroori)
+    // Railway pe BACKEND hi socket URL hai — alag SOCKET_URL ki zaroorat nahi
     const socketUrl = process.env.SOCKET_URL || BACKEND;
     console.log("[TT] Connecting socket to:", socketUrl);
 
@@ -330,7 +326,7 @@ async function ttSocketConnect() {
       reconnectionDelay: 3000,
     });
     _ttSocket.on("connect", () => {
-      console.log("[TT] Socket connected to:", socketUrl);
+      console.log("[TT] ✅ Socket connected:", socketUrl);
       _ttSocket.emit("join", `emp_${_ttEmpId}`);
       _ttSocket.emit("join", "admins");
     });
@@ -525,6 +521,11 @@ async function sendHeartbeat(activeApp, windowTitle, mouseEvents, keyEvents) {
     );
     console.log("💓 Heartbeat:", activeApp || "idle");
   } catch (e) {
+    // Railway cold start — retry next cycle
+    if (e.code === "ECONNABORTED" || e.code === "ECONNREFUSED") {
+      console.log("⏳ Railway cold start / network — retry next cycle");
+      return;
+    }
     console.log("❌ Heartbeat error:", e.message);
   }
 }
@@ -538,15 +539,14 @@ async function takeScreenshot() {
   return await sharp(sources[0].thumbnail.toPNG()).jpeg({ quality: 60 }).toBuffer();
 }
 
-// ✅ BUG 2 FIXED: Base64 Vercel ko mat bhejo — seedha Cloudinary upload karo,
-//    sirf URL backend ko bhejo. Vercel ka 4.5MB body limit bypass hota hai.
+// ✅ Cloudinary upload — Railway backend ka 4.5MB limit nahi hota lekin
+//    Cloudinary use karna better practice hai (CDN, fast loading)
 async function uploadScreenshotToCloudinary(jpegBuffer) {
-  const CLOUD_NAME   = process.env.CLOUDINARY_CLOUD_NAME;
-  const UPLOAD_PRESET = process.env.CLOUDINARY_UPLOAD_PRESET; // unsigned preset
+  const CLOUD_NAME    = process.env.CLOUDINARY_CLOUD_NAME;
+  const UPLOAD_PRESET = process.env.CLOUDINARY_UPLOAD_PRESET;
 
   if (!CLOUD_NAME || !UPLOAD_PRESET) {
-    // Fallback: agar Cloudinary setup nahi to base64 try karo (dev mein)
-    console.warn("⚠️ Cloudinary env vars missing — base64 fallback (may fail on Vercel)");
+    console.warn("⚠️ Cloudinary env vars missing — base64 fallback");
     return "data:image/jpeg;base64," + jpegBuffer.toString("base64");
   }
 
@@ -574,7 +574,6 @@ async function captureScreen() {
 
     await sendHeartbeat(smartApp, windowTitle, 5, 3);
 
-    // ✅ BUG 2 FIXED: Cloudinary se URL lo, base64 nahi
     const imageUrl = await uploadScreenshotToCloudinary(await takeScreenshot());
 
     await axios.post(
@@ -588,7 +587,7 @@ async function captureScreen() {
         app:          smartApp,
         windowTitle,
         rawApp:       rawAppName,
-        imageUrl,       // ✅ Ab URL hai, 4.5MB base64 nahi
+        imageUrl,
         isBlocked:    isFlagged,
         blockedApp:   flaggedAppName,
         time:         new Date().toLocaleTimeString(),
@@ -605,6 +604,10 @@ async function captureScreen() {
 
     console.log(`📸 ${employeeData.name} | ${smartApp} ${isFlagged ? "🚨 FLAGGED" : "✅"}`);
   } catch (e) {
+    if (e.code === "ECONNABORTED" || e.code === "ECONNREFUSED") {
+      console.log("⏳ Railway cold start / network — retry next cycle");
+      return;
+    }
     console.log("❌ Capture error:", e.message);
   }
 }

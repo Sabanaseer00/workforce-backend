@@ -14,17 +14,20 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 config({ path: path.join(__dirname, ".env") });
 
+// ✅ FIX: activity.js ka startTracking/stopTracking import karo
+import { startTracking, stopTracking, cleanupOnQuit } from "./activity.js";
+
 // ═══════════════════════════════════════════════════════════════════════
-//  PRODUCTION CONFIG — Railway backend
-//  .env mein BACKEND_URL set karo (VITE_BACKEND_URL nahi)
+//  PRODUCTION CONFIG
 // ═══════════════════════════════════════════════════════════════════════
 const BACKEND  = process.env.BACKEND_URL
               || "https://workforce-backend-production-cc13.up.railway.app";
 
+// ✅ FIX: FRONTEND_URL .env se lo — agar set nahi to login window hi dikhao
 const FRONTEND = process.env.FRONTEND_URL
               || "https://your-frontend.vercel.app";
 
-console.log("🌐 Backend URL:", BACKEND);
+console.log("🌐 Backend URL :", BACKEND);
 console.log("🖥  Frontend URL:", FRONTEND);
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -61,7 +64,7 @@ async function fetchAdminBlockedSites() {
     const domains = sites
       .map(s => (typeof s === "string" ? s : s.domain))
       .filter(Boolean);
-    console.log(`🔒 Admin blocked sites fetched (${domains.length}):`, domains.join(", ") || "none");
+    console.log(`🔒 Admin blocked sites (${domains.length}):`, domains.join(", ") || "none");
     return domains;
   } catch (e) {
     console.log("⚠️ Could not fetch blocked sites:", e.message);
@@ -93,7 +96,7 @@ function applyHostsBlock(sites) {
     }
     fs.writeFileSync(HOSTS_FILE, content, "utf8");
     execSync("ipconfig /flushdns", { stdio: "ignore" });
-    console.log(sites.length > 0 ? `🚫 Hosts: ${sites.length} site(s) blocked` : "✅ Hosts: All sites unblocked");
+    console.log(sites.length > 0 ? `🚫 Hosts: ${sites.length} site(s) blocked` : "✅ Hosts unblocked");
   } catch (err) {
     console.error("❌ Hosts update failed:", err.message);
   }
@@ -114,21 +117,21 @@ function applyFirewallBlock(sites) {
         );
       } catch {}
     });
-    console.log(sites.length > 0 ? `🔥 Firewall: ${sites.length} site(s) blocked` : "✅ Firewall: All WorkTrack rules removed");
+    console.log(sites.length > 0 ? `🔥 Firewall: ${sites.length} site(s) blocked` : "✅ Firewall rules removed");
   } catch (err) {
     console.error("❌ Firewall update failed:", err.message);
   }
 }
 
 async function blockEverything() {
-  console.log("🚫 Work mode ON — admin blocked sites fetch ho rahi hain...");
+  console.log("🚫 Work mode ON — fetching admin blocked sites...");
   _adminBlockedSites = await fetchAdminBlockedSites();
   applyHostsBlock(_adminBlockedSites);
   applyFirewallBlock(_adminBlockedSites);
 }
 
 function unblockEverything() {
-  console.log("✅ Work mode OFF — sab unblock ho raha hai...");
+  console.log("✅ Work mode OFF — unblocking...");
   applyHostsBlock([]);
   applyFirewallBlock([]);
   _adminBlockedSites = [];
@@ -141,7 +144,7 @@ async function refreshAdminBlockedSites() {
     newSites.length !== _adminBlockedSites.length ||
     newSites.some(s => !_adminBlockedSites.includes(s));
   if (changed) {
-    console.log("🔄 Admin blocked sites update ho gayi — re-applying...");
+    console.log("🔄 Blocked sites updated — re-applying...");
     _adminBlockedSites = newSites;
     applyHostsBlock(_adminBlockedSites);
     applyFirewallBlock(_adminBlockedSites);
@@ -206,7 +209,7 @@ async function ttFetch() {
     }
     if (Array.isArray(tasks)) {
       _ttTasks = tasks;
-      console.log(`[TT] ${tasks.length} tasks:`, tasks.map(t => `${t.title}(${t.status})`).join(", "));
+      console.log(`[TT] ${tasks.length} tasks fetched`);
     }
   } catch (e) { console.log("[TT] fetch error:", e.message); }
 }
@@ -260,7 +263,6 @@ async function ttCheck() {
 
     const win   = await activeWin();
     const title = win?.title || win?.owner?.name || "";
-    console.log(`[TT] Active window: "${title.slice(0, 70)}"`);
 
     let isIdle = isSystemIdle(title);
     try {
@@ -301,8 +303,6 @@ async function ttCheck() {
   } catch (e) { console.log("[TT] check error:", e.message); }
 }
 
-// ✅ Socket — Railway pe WebSocket support karta hai (Vercel ke ulat)
-//    Railway pe persistent connections kaam karti hain
 async function ttSocketConnect() {
   try {
     let ioFn;
@@ -314,7 +314,6 @@ async function ttSocketConnect() {
       return;
     }
 
-    // Railway pe BACKEND hi socket URL hai — alag SOCKET_URL ki zaroorat nahi
     const socketUrl = process.env.SOCKET_URL || BACKEND;
     console.log("[TT] Connecting socket to:", socketUrl);
 
@@ -326,7 +325,7 @@ async function ttSocketConnect() {
       reconnectionDelay: 3000,
     });
     _ttSocket.on("connect", () => {
-      console.log("[TT] ✅ Socket connected:", socketUrl);
+      console.log("[TT] ✅ Socket connected");
       _ttSocket.emit("join", `emp_${_ttEmpId}`);
       _ttSocket.emit("join", "admins");
     });
@@ -337,7 +336,7 @@ async function ttSocketConnect() {
       );
     });
     _ttSocket.on("blockedSites:update", () => {
-      console.log("🔔 Admin ne blocked sites update ki — refresh ho rahi hain...");
+      console.log("🔔 Admin ne blocked sites update ki");
       refreshAdminBlockedSites();
     });
     _ttSocket.on("disconnect",    () => console.log("[TT] Socket disconnected"));
@@ -367,6 +366,8 @@ function ttStop() {
 // ═══════════════════════════════════════════════════════════════════════
 let mainWin         = null;
 let loginWin        = null;
+
+// ✅ FIX: captureInterval alag se manage — activity.js ke heartbeat se conflict nahi
 let captureInterval = null;
 let employeeData    = null;
 let TOKEN_FILE      = null;
@@ -403,12 +404,12 @@ async function validateToken(token) {
 }
 
 function getSmartAppName(appName, windowTitle) {
-  const combined = (appName + " " + windowTitle).toLowerCase();
+  const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
   for (const b of FLAGGED_APPS)
     if (b.keywords.some(k => combined.includes(k))) return b.name;
   if (windowTitle) {
     const isBrowser = ["chrome", "edge", "firefox", "brave", "opera"].some(b =>
-      appName.toLowerCase().includes(b)
+      (appName || "").toLowerCase().includes(b)
     );
     if (isBrowser) {
       const p = windowTitle.split(" - ");
@@ -419,7 +420,7 @@ function getSmartAppName(appName, windowTitle) {
 }
 
 function getFlaggedInfo(appName, windowTitle) {
-  const combined = (appName + " " + windowTitle).toLowerCase();
+  const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
   for (const b of FLAGGED_APPS)
     if (b.keywords.some(k => combined.includes(k)))
       return { isFlagged: true, flaggedAppName: b.name };
@@ -498,55 +499,46 @@ function createMainWindow() {
   });
   mainWin.loadURL(FRONTEND);
   console.log("🖥  Main window loading:", FRONTEND);
+
+  // ✅ FIX: Main window close pe logout karo
+  mainWin.on("closed", () => {
+    mainWin = null;
+  });
 }
 
-async function sendHeartbeat(activeApp, windowTitle, mouseEvents, keyEvents) {
-  if (!employeeData?.id || !employeeData?.token) return;
+// ═══════════════════════════════════════════════════════════════════════
+//  SCREENSHOT CAPTURE — activity.js ke heartbeat se ALAG rakha
+//  activity.js => mouse/keyboard tracking + heartbeat (10s)
+//  captureScreen => screenshot only (30s interval)
+// ═══════════════════════════════════════════════════════════════════════
+
+// ✅ FIX: takeScreenshot — main process mein desktopCapturer properly use karna
+async function takeScreenshot() {
+  // ✅ FIX: desktopCapturer.getSources() main process mein kaam karta hai
+  //    lekin Electron v20+ mein screen permission required hai
   try {
-    await axios.post(
-      `${BACKEND}/api/employees/heartbeat`,
-      {
-        employeeId: employeeData.id,
-        activeApp,
-        windowTitle,
-        mouseEvents,
-        keyEvents,
-        isRemote:     false,
-        vpnConnected: false,
-      },
-      {
-        headers: { Authorization: `Bearer ${employeeData.token}` },
-        timeout: 8000,
-      }
-    );
-    console.log("💓 Heartbeat:", activeApp || "idle");
-  } catch (e) {
-    // Railway cold start — retry next cycle
-    if (e.code === "ECONNABORTED" || e.code === "ECONNREFUSED") {
-      console.log("⏳ Railway cold start / network — retry next cycle");
-      return;
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width: 1280, height: 720 },
+    });
+    if (!sources || sources.length === 0) {
+      throw new Error("No screen source found");
     }
-    console.log("❌ Heartbeat error:", e.message);
+    return await sharp(sources[0].thumbnail.toPNG())
+      .jpeg({ quality: 60 })
+      .toBuffer();
+  } catch (err) {
+    console.error("❌ takeScreenshot error:", err.message);
+    throw err;
   }
 }
 
-async function takeScreenshot() {
-  const sources = await desktopCapturer.getSources({
-    types: ["screen"],
-    thumbnailSize: { width: 1280, height: 720 },
-  });
-  if (!sources || sources.length === 0) throw new Error("No screen source");
-  return await sharp(sources[0].thumbnail.toPNG()).jpeg({ quality: 60 }).toBuffer();
-}
-
-// ✅ Cloudinary upload — Railway backend ka 4.5MB limit nahi hota lekin
-//    Cloudinary use karna better practice hai (CDN, fast loading)
 async function uploadScreenshotToCloudinary(jpegBuffer) {
   const CLOUD_NAME    = process.env.CLOUDINARY_CLOUD_NAME;
   const UPLOAD_PRESET = process.env.CLOUDINARY_UPLOAD_PRESET;
 
   if (!CLOUD_NAME || !UPLOAD_PRESET) {
-    console.warn("⚠️ Cloudinary env vars missing — base64 fallback");
+    console.warn("⚠️ Cloudinary env vars missing — base64 fallback use ho raha hai");
     return "data:image/jpeg;base64," + jpegBuffer.toString("base64");
   }
 
@@ -564,7 +556,12 @@ async function uploadScreenshotToCloudinary(jpegBuffer) {
 }
 
 async function captureScreen() {
-  if (!employeeData) return;
+  // ✅ FIX: employeeData null check — agar employee logout ho gaya to capture band
+  if (!employeeData?.id || !employeeData?.token) {
+    console.log("⚠️ captureScreen: employeeData nahi hai — skipping");
+    return;
+  }
+
   try {
     const aw          = await activeWin();
     const rawAppName  = aw?.owner?.name || "";
@@ -572,9 +569,9 @@ async function captureScreen() {
     const smartApp    = getSmartAppName(rawAppName, windowTitle);
     const { isFlagged, flaggedAppName } = getFlaggedInfo(rawAppName, windowTitle);
 
-    await sendHeartbeat(smartApp, windowTitle, 5, 3);
-
-    const imageUrl = await uploadScreenshotToCloudinary(await takeScreenshot());
+    // ✅ FIX: Screenshot le lo
+    const jpegBuffer = await takeScreenshot();
+    const imageUrl   = await uploadScreenshotToCloudinary(jpegBuffer);
 
     await axios.post(
       `${BACKEND}/api/screenshots/live`,
@@ -602,7 +599,7 @@ async function captureScreen() {
       }
     );
 
-    console.log(`📸 ${employeeData.name} | ${smartApp} ${isFlagged ? "🚨 FLAGGED" : "✅"}`);
+    console.log(`📸 Screenshot sent | ${employeeData.name} | ${smartApp} ${isFlagged ? "🚨 FLAGGED" : "✅"}`);
   } catch (e) {
     if (e.code === "ECONNABORTED" || e.code === "ECONNREFUSED") {
       console.log("⏳ Railway cold start / network — retry next cycle");
@@ -612,14 +609,21 @@ async function captureScreen() {
   }
 }
 
+// ✅ FIX: Screenshot interval 30s — activity.js heartbeat (10s) se alag
 function startCapture() {
   if (captureInterval) clearInterval(captureInterval);
-  captureScreen();
-  captureInterval = setInterval(captureScreen, 10000);
+  // Pehla screenshot 5 second baad lo (login settle hone do)
+  setTimeout(() => {
+    captureScreen();
+    captureInterval = setInterval(captureScreen, 30_000);
+    console.log("📸 Screenshot capture started (30s interval)");
+  }, 5000);
 }
+
 function stopCapture() {
   if (captureInterval) clearInterval(captureInterval);
   captureInterval = null;
+  console.log("📸 Screenshot capture stopped");
 }
 
 async function goOffline() {
@@ -637,15 +641,61 @@ async function goOffline() {
   } catch {}
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+//  ✅ FIX: startAllTracking — ek jagah se sab kuch start karo
+//  activity.js startTracking + screenshot capture + task tracker
+// ═══════════════════════════════════════════════════════════════════════
+async function startAllTracking(empData) {
+  employeeData = empData;
+
+  console.log(`\n🚀 Starting all tracking for: ${empData.name} (${empData.id})`);
+
+  // 1. Activity tracking (mouse/keyboard/heartbeat) — activity.js
+  try {
+    await startTracking(empData);
+    console.log("✅ Activity tracking started");
+  } catch (e) {
+    console.error("❌ Activity tracking start failed:", e.message);
+  }
+
+  // 2. Screenshot capture — alag interval
+  startCapture();
+
+  // 3. Task tracker
+  await ttStart(empData.token, empData.id);
+
+  // 4. Admin blocked sites
+  await blockEverything();
+
+  console.log("✅ All tracking systems active\n");
+}
+
+// ✅ FIX: stopAllTracking — sab kuch properly band karo
+async function stopAllTracking() {
+  console.log("\n⏹ Stopping all tracking...");
+
+  stopCapture();
+  ttStop();
+
+  try {
+    await stopTracking(); // activity.js — go-offline bhi call karta hai
+  } catch (e) {
+    console.error("❌ stopTracking error:", e.message);
+    // Manually go-offline agar stopTracking fail ho
+    await goOffline();
+  }
+
+  unblockEverything();
+
+  console.log("✅ All tracking stopped\n");
+}
+
 // ══════════════════════════════════════════════════════
 //  IPC HANDLERS
 // ══════════════════════════════════════════════════════
 ipcMain.on("employee-logout", async () => {
   console.log("🔄 Logout ho raha hai...");
-  stopCapture();
-  ttStop();
-  await goOffline();
-  unblockEverything();
+  await stopAllTracking();
   clearToken();
   employeeData = null;
   if (mainWin) { mainWin.close(); mainWin = null; }
@@ -660,32 +710,45 @@ ipcMain.on("do-login", async (event, { email, pwd }) => {
       { email, password: pwd, role: "employee" },
       { timeout: 10000 }
     );
-    employeeData = {
+
+    // ✅ FIX: employeeData mein backend URL bhi pass karo activity.js ke liye
+    const empData = {
       token:      res.data.token,
-      id:         res.data.user?.id,
-      empId:      res.data.user?.empId || res.data.user?.id,
+      id:         res.data.user?.id || res.data.user?._id,
+      empId:      res.data.user?.empId || res.data.user?.id || res.data.user?._id,
       name:       res.data.user?.name
-                  || `${res.data.user?.firstName || ""} ${res.data.user?.lastName || ""}`.trim(),
+                  || `${res.data.user?.firstName || ""} ${res.data.user?.lastName || ""}`.trim()
+                  || res.data.user?.email,
       department: res.data.user?.department,
       role:       res.data.user?.role,
       email:      res.data.user?.email,
+      backendUrl: BACKEND, // ✅ activity.js ko explicitly dena
     };
-    saveToken(employeeData);
+
+    // ✅ FIX: Validation — id aur token dono zarori hain
+    if (!empData.id || !empData.token) {
+      throw new Error("Server ne valid user data nahi diya. Backend check karo.");
+    }
+
+    saveToken(empData);
+
     if (loginWin) {
       loginWin.removeAllListeners("closed");
       loginWin.close();
       loginWin = null;
     }
+
     createMainWindow();
-    startCapture();
-    ttStart(employeeData.token, employeeData.id);
-    await blockEverything();
-    console.log(`✅ Logged in: ${employeeData.name}`);
+
+    // ✅ FIX: startAllTracking — sab kuch ek jagah se start
+    await startAllTracking(empData);
+
+    console.log(`✅ Logged in & tracking started: ${empData.name}`);
   } catch (e) {
     console.error("❌ Login failed:", e?.response?.data || e.message);
     event.sender.send(
       "login-error",
-      e?.response?.data?.message || `Login failed (${e.message})`
+      e?.response?.data?.message || `Login failed: ${e.message}`
     );
   }
 });
@@ -697,17 +760,15 @@ app.whenReady().then(async () => {
   initPaths();
   const saved = loadSavedToken();
   if (saved?.token && saved?.id) {
-    console.log("🔍 Saved token check ho raha hai →", BACKEND);
+    console.log("🔍 Saved token validating →", BACKEND);
     const valid = await validateToken(saved.token);
     if (valid) {
-      employeeData = saved;
-      console.log(`✅ Auto-login: ${employeeData.name}`);
+      console.log(`✅ Auto-login: ${saved.name}`);
       createMainWindow();
-      startCapture();
-      ttStart(employeeData.token, employeeData.id);
-      await blockEverything();
+      // ✅ FIX: auto-login pe bhi startAllTracking call karo
+      await startAllTracking(saved);
     } else {
-      console.log("⚠️ Token expire ho gaya — login page");
+      console.log("⚠️ Token expire — login page");
       clearToken();
       createLoginWindow();
     }
@@ -718,10 +779,8 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", async (e) => {
   e.preventDefault();
-  stopCapture();
-  ttStop();
-  await goOffline();
-  unblockEverything();
+  await stopAllTracking();
+  await cleanupOnQuit();
   app.exit(0);
 });
 

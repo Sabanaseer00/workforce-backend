@@ -6,17 +6,18 @@
 //   BUG 4 FIX: stopTaskAgent() me timer null check aur cleanup proper
 //   BUG 5 FIX: Retry logic + better error logging Railway ke liye
 //   BUG 6 FIX: Endpoint 404 hone par graceful fallback — heartbeat endpoint use karo
+//   BUG 7 FIX: empData.backendUrl support — dynamic backend URL
 
 import axios from "axios";
 import pkg from "electron";
 
-// ✅ BUG 1 FIXED: Railway URL — VITE_ prefix hata diya (main process mein undefined hota hai)
+// ✅ BUG 1 FIXED: Railway URL — VITE_ prefix hata diya
 const BASE_URL =
   process.env.BACKEND_URL ||
   "https://workforce-backend-production-cc13.up.railway.app";
 
 const INTERVAL         = 30 * 1000; // 30 seconds
-const IDLE_THRESHOLD   = 300;       // 5 minutes
+const IDLE_THRESHOLD   = 300;       // 5 minutes idle
 const REQUEST_TIMEOUT  = 10_000;    // 10 seconds
 
 console.log("[TaskAgent] Backend URL:", BASE_URL);
@@ -57,7 +58,7 @@ function isUserIdle() {
 }
 
 // ══════════════════════════════════════════════════════
-//  AXIOS INSTANCE — Railway ke liye optimized
+//  AXIOS HEADERS
 // ══════════════════════════════════════════════════════
 function makeHeaders() {
   return {
@@ -67,11 +68,10 @@ function makeHeaders() {
 }
 
 // ══════════════════════════════════════════════════════
-//  ENDPOINT TEST — pehli baar check karo kya exist karta hai
+//  ENDPOINT TEST
 // ══════════════════════════════════════════════════════
 async function testAgentEndpoint() {
   try {
-    // OPTIONS request se check karo (low cost)
     await axios.options(`${BASE_URL}/api/tasks/agent/update`, {
       timeout: 5000,
     });
@@ -81,9 +81,9 @@ async function testAgentEndpoint() {
     const status = err?.response?.status;
     if (status === 404 || status === undefined) {
       _endpointWorks = false;
-      console.warn("[TaskAgent] ⚠️ /api/tasks/agent/update not found — heartbeat fallback use hoga");
+      console.warn("[TaskAgent] ⚠️ /api/tasks/agent/update not found — heartbeat fallback");
     } else {
-      // 405 Method Not Allowed = endpoint exists (OPTIONS nahi accept karta)
+      // 405 Method Not Allowed = endpoint exists
       _endpointWorks = true;
       console.log(`[TaskAgent] ✅ Endpoint exists (HTTP ${status})`);
     }
@@ -91,7 +91,7 @@ async function testAgentEndpoint() {
 }
 
 // ══════════════════════════════════════════════════════
-//  PRIMARY PING — /api/tasks/agent/update
+//  PRIMARY PING
 // ══════════════════════════════════════════════════════
 async function pingAgentEndpoint(payload) {
   const res = await axios.post(
@@ -108,19 +108,18 @@ async function pingAgentEndpoint(payload) {
 }
 
 // ══════════════════════════════════════════════════════
-//  FALLBACK PING — /api/employees/heartbeat
-//  (jab agent endpoint exist na kare Railway pe)
+//  FALLBACK PING
 // ══════════════════════════════════════════════════════
 async function pingHeartbeatFallback(payload) {
   const res = await axios.post(
     `${BASE_URL}/api/employees/heartbeat`,
     {
-      employeeId:  payload.employeeId,
-      activeApp:   payload.activeApp,
-      windowTitle: payload.windowTitle,
-      mouseEvents: 0,
-      keyEvents:   0,
-      isRemote:    false,
+      employeeId:   payload.employeeId,
+      activeApp:    payload.activeApp,
+      windowTitle:  payload.windowTitle,
+      mouseEvents:  0,
+      keyEvents:    0,
+      isRemote:     false,
       vpnConnected: false,
     },
     { headers: makeHeaders(), timeout: REQUEST_TIMEOUT }
@@ -129,7 +128,7 @@ async function pingHeartbeatFallback(payload) {
 }
 
 // ══════════════════════════════════════════════════════
-//  MAIN PING — endpoint test + smart routing
+//  MAIN PING
 // ══════════════════════════════════════════════════════
 async function pingServer() {
   if (!_employeeId) return;
@@ -144,7 +143,6 @@ async function pingServer() {
     isWorking:   !idle,
   };
 
-  // Pehli baar endpoint test karo
   if (_endpointWorks === null) {
     await testAgentEndpoint();
   }
@@ -159,27 +157,24 @@ async function pingServer() {
     const status = err?.response?.status;
     const msg    = err?.response?.data?.message || err.message;
 
-    // 404 mil gaya — fallback pe switch karo
     if (status === 404 && _endpointWorks) {
-      console.warn("[TaskAgent] ⚠️ 404 received — switching to heartbeat fallback permanently");
+      console.warn("[TaskAgent] ⚠️ 404 — switching to heartbeat fallback");
       _endpointWorks = false;
       try {
         await pingHeartbeatFallback(payload);
       } catch (fallbackErr) {
-        console.error("[TaskAgent] ❌ Fallback bhi fail hua:", fallbackErr.message);
+        console.error("[TaskAgent] ❌ Fallback failed:", fallbackErr.message);
       }
       return;
     }
 
-    // Railway cold start / timeout
     if (err.code === "ECONNABORTED" || err.code === "ERR_NETWORK") {
-      console.warn(`[TaskAgent] ⏳ Railway cold start ya network issue — retry hoga 30s mein`);
+      console.warn(`[TaskAgent] ⏳ Railway cold start / network — retry in 30s`);
       return;
     }
 
-    // ECONNREFUSED — Railway server down
     if (err.code === "ECONNREFUSED") {
-      console.warn("[TaskAgent] 🔴 Railway server reachable nahi — check karo:", BASE_URL);
+      console.warn("[TaskAgent] 🔴 Railway server unreachable:", BASE_URL);
       return;
     }
 
@@ -205,7 +200,6 @@ export function startTaskAgent(employeeId, token) {
     return;
   }
 
-  // Pehle se chal raha hai to band karo
   if (agentTimer) {
     clearInterval(agentTimer);
     agentTimer = null;
@@ -213,9 +207,8 @@ export function startTaskAgent(employeeId, token) {
 
   _employeeId    = employeeId;
   _token         = token || null;
-  _endpointWorks = null; // pehli ping pe fresh test hoga
+  _endpointWorks = null;
 
-  // Pehla ping turant
   pingServer();
   agentTimer = setInterval(pingServer, INTERVAL);
 
@@ -223,7 +216,7 @@ export function startTaskAgent(employeeId, token) {
 }
 
 /**
- * Task agent band karo — cleanup proper hai
+ * Task agent band karo
  */
 export function stopTaskAgent() {
   if (agentTimer) {
@@ -240,8 +233,8 @@ export function stopTaskAgent() {
  * Employee update karo bina restart ke
  */
 export function setTaskAgentEmployee(employeeId, token) {
-  _employeeId = employeeId;
+  _employeeId    = employeeId;
   if (token) _token = token;
-  _endpointWorks = null; // re-test karo
+  _endpointWorks = null;
   console.log(`[TaskAgent] 🔄 Employee updated: ${employeeId}`);
 }

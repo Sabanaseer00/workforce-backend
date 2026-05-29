@@ -1,5 +1,5 @@
 // activity.js — Electron Agent ke liye Complete Activity Tracker
-// ✅ ALL BUGS FIXED:
+// ✅ ALL BUGS FIXED (Updated):
 //   BUG 1 FIX: lastWinTitle initial value — first poll mismatch fix
 //   BUG 2 FIX: stopTracking() race condition — go-offline pehle, uiohook baad mein
 //   BUG 3 FIX: VITE_ prefix remove — Electron main process mein kaam nahi karta
@@ -7,16 +7,22 @@
 //   BUG 5 FIX: Railway URL — Vercel URL hata di
 //   BUG 6 FIX: Railway cold start errors gracefully handle kiye
 //   BUG 7 FIX: sendHeartbeat mein mouseEvents/keyEvents reset race condition fix
+//   BUG 8 FIX: employeeData.backendUrl use karo — dynamic backend support
+//   BUG 9 FIX: startTracking mein empData validation
+//   BUG 10 FIX: go-offline activity.js mein bhi — double-call safe hai
 
 import activeWin from "active-win";
 import axios from "axios";
 
-// ✅ BUG 5 FIXED: Railway backend URL
-const BACKEND =
+// ✅ BUG 5 + 8 FIXED: BACKEND startTracking ke time empData se milega
+//    Fallback ke liye env variable ya hardcoded Railway URL
+const DEFAULT_BACKEND =
   process.env.BACKEND_URL ||
   "https://workforce-backend-production-cc13.up.railway.app";
 
-console.log("[Activity] Backend URL:", BACKEND);
+let BACKEND = DEFAULT_BACKEND;
+
+console.log("[Activity] Default Backend URL:", BACKEND);
 
 // ── Productive apps list ──
 const PRODUCTIVE_APPS = [
@@ -64,18 +70,24 @@ let _uiohook        = null;
 let _uiohookActive  = false;
 let _pollTimer      = null;
 
+// ✅ FIX: uiohook setup properly — multiple start calls se protect karo
+let _trackingActive = false;
+
 async function setupInputTracking() {
   try {
     const { uIOhook } = await import("uiohook-napi");
     _uiohook = uIOhook;
+
+    // ✅ FIX: Pehle listeners lagao, phir start karo
     uIOhook.on("mousemove",  () => { mouseEvents++; });
     uIOhook.on("mouseclick", () => { mouseEvents++; });
     uIOhook.on("keydown",    () => { keyEvents++; });
+
     uIOhook.start();
     _uiohookActive = true;
-    console.log("✅ uiohook active — real mouse/keyboard tracking");
+    console.log("[Activity] ✅ uiohook active — real mouse/keyboard tracking");
   } catch (e) {
-    console.log("⚠ uiohook not available — window-poll fallback active:", e.message);
+    console.log("[Activity] ⚠ uiohook not available — window-poll fallback:", e.message);
     _uiohookActive = false;
     startWindowPollFallback();
   }
@@ -89,7 +101,7 @@ function startWindowPollFallback() {
       if (!w) return;
       const title = (w.title || "") + (w.owner?.name || "");
 
-      // ✅ BUG 1 FIXED: pehli poll pe sirf lastWinTitle set karo, count mat karo
+      // ✅ BUG 1 FIXED: pehli poll pe sirf lastWinTitle set karo
       if (lastWinTitle === null) {
         lastWinTitle = title;
         return;
@@ -102,7 +114,7 @@ function startWindowPollFallback() {
       }
     } catch {}
   }, 2000);
-  console.log("🔄 Window-poll fallback started (2s interval)");
+  console.log("[Activity] 🔄 Window-poll fallback started (2s interval)");
 }
 
 function getSmartAppName(appName, windowTitle) {
@@ -127,7 +139,7 @@ function computeStatus(appName, windowTitle, mouseCount, keyCount) {
 }
 
 function computeActivityPct(mouseCount, keyCount) {
-  const total = mouseCount + keyCount;
+  const total     = mouseCount + keyCount;
   const threshold = _uiohookActive ? 20 : 8;
   return Math.min(100, Math.round((total / threshold) * 100));
 }
@@ -171,24 +183,27 @@ function getTopApps() {
   const total = entries.reduce((s, [, v]) => s + v, 1);
   return entries.map(([name, seconds]) => ({
     name,
-    pct: Math.round((seconds / total) * 100),
+    pct:  Math.round((seconds / total) * 100),
     time: formatTime(seconds),
   }));
 }
 
 async function sendHeartbeat() {
-  if (!employeeData?.token || !employeeData?.id) return;
+  // ✅ BUG 9 FIX: employeeData validation — id aur token dono check karo
+  if (!employeeData?.token || !employeeData?.id) {
+    console.log("[Activity] ⚠️ sendHeartbeat skipped — employeeData incomplete");
+    return;
+  }
 
   try {
     const activeWindow = await activeWin().catch(() => null);
-    const rawApp   = activeWindow?.owner?.name || "";
-    const winTitle = activeWindow?.title || "";
-    const smartApp = getSmartAppName(rawApp, winTitle);
+    const rawApp       = activeWindow?.owner?.name || "";
+    const winTitle     = activeWindow?.title || "";
+    const smartApp     = getSmartAppName(rawApp, winTitle);
 
     if (smartApp !== lastApp) updateAppUsage(smartApp);
 
     // ✅ BUG 7 FIXED: snapshot lo pehle, phir reset karo
-    //    Warna agar await ke dauraan events aayein to woh lost ho jaate hain
     const curMouse  = mouseEvents;
     const curKey    = keyEvents;
     mouseEvents     = 0;
@@ -219,76 +234,117 @@ async function sendHeartbeat() {
       }
     );
 
-    console.log(`💓 Heartbeat | ${smartApp} | ${status}`);
+    console.log(`[Activity] 💓 Heartbeat | ${smartApp} | ${status} | mouse:${curMouse} key:${curKey}`);
   } catch (err) {
     // ✅ BUG 6 FIXED: Railway-specific errors handle
     if (err.code === "ECONNABORTED" || err.code === "ECONNREFUSED") {
-      console.log("⏳ Railway cold start / network — retry next cycle");
+      console.log("[Activity] ⏳ Railway cold start / network — retry next cycle");
       return;
     }
     if (err.code === "ERR_NETWORK") {
-      console.log("🔴 Network error — internet check karo");
+      console.log("[Activity] 🔴 Network error — internet check karo");
       return;
     }
-    console.error("❌ Heartbeat error:", err.message);
+    // ✅ FIX: 401 Unauthorized — token expire ho gaya
+    if (err?.response?.status === 401) {
+      console.log("[Activity] 🔑 Token unauthorized — heartbeat band kar raha hun");
+      if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
+      return;
+    }
+    console.error("[Activity] ❌ Heartbeat error:", err.message);
   }
 }
 
 export async function startTracking(empData) {
-  employeeData    = empData;
+  // ✅ BUG 9 FIX: Validation pehle
+  if (!empData?.id || !empData?.token) {
+    console.error("[Activity] ❌ startTracking failed — empData.id or empData.token missing");
+    console.error("[Activity] Received empData:", JSON.stringify({ ...empData, token: empData?.token ? "***" : undefined }));
+    return;
+  }
+
+  // ✅ FIX: Agar pehle se chal raha hai to band karo pehle
+  if (_trackingActive) {
+    console.log("[Activity] ⚠️ Already tracking — stopping first");
+    await stopTracking();
+  }
+
+  employeeData = empData;
+
+  // ✅ BUG 8 FIX: empData.backendUrl se BACKEND update karo
+  if (empData.backendUrl) {
+    BACKEND = empData.backendUrl;
+    console.log("[Activity] 🌐 Backend URL updated:", BACKEND);
+  }
+
   sessionStart    = new Date();
   appUsageMap     = {};
   mouseEvents     = 0;
   keyEvents       = 0;
   lastApp         = "";
-  lastWinTitle    = null; // ✅ BUG 1: null se shuru — undefined nahi
+  lastWinTitle    = null;
   currentAppStart = new Date();
+  _trackingActive = true;
 
-  console.log(`🟢 Tracking started → ${BACKEND}`);
+  console.log(`[Activity] 🟢 Tracking started → Employee: ${empData.name} (${empData.id}) → ${BACKEND}`);
 
   await setupInputTracking();
+
+  // ✅ FIX: Pehla heartbeat immediately bhejo
   await sendHeartbeat();
 
-  heartbeatTimer = setInterval(sendHeartbeat, 10000);
+  heartbeatTimer = setInterval(sendHeartbeat, 10_000);
+  console.log("[Activity] ✅ Heartbeat interval set (10s)");
 }
 
 // ✅ BUG 2 FIXED: go-offline pehle, uiohook.stop() baad mein
-//    Pehle wala code uiohook.stop() pehle karta tha — race condition tha
 export async function stopTracking() {
-  if (!employeeData) return;
+  if (!_trackingActive && !employeeData) {
+    console.log("[Activity] ⚠️ stopTracking called but not active — skipping");
+    return;
+  }
+
+  console.log("[Activity] ⏹ Stopping tracking...");
 
   // Timers band karo sabse pehle
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
   if (_pollTimer)     { clearInterval(_pollTimer);     _pollTimer = null;     }
 
   // Go-offline API call — uiohook se pehle
-  try {
-    await axios.post(
-      `${BACKEND}/api/employees/go-offline`,
-      { employeeId: employeeData.id },
-      {
-        headers: { Authorization: `Bearer ${employeeData.token}` },
-        timeout: 5000,
-      }
-    );
-    console.log("🔴 Employee offline");
-  } catch (err) {
-    console.error("Go-offline error:", err.message);
+  if (employeeData?.id && employeeData?.token) {
+    try {
+      await axios.post(
+        `${BACKEND}/api/employees/go-offline`,
+        { employeeId: employeeData.id },
+        {
+          headers: { Authorization: `Bearer ${employeeData.token}` },
+          timeout: 5000,
+        }
+      );
+      console.log("[Activity] 🔴 Employee marked offline");
+    } catch (err) {
+      console.error("[Activity] go-offline error:", err.message);
+    }
   }
 
   // uiohook band karo go-offline ke baad
   if (_uiohook && _uiohookActive) {
-    try { _uiohook.stop(); } catch {}
+    try { _uiohook.stop(); } catch (e) {
+      console.log("[Activity] uiohook stop error:", e.message);
+    }
   }
 
   // State reset
-  employeeData   = null;
-  sessionStart   = null;
-  _uiohookActive = false;
-  lastWinTitle   = null;
-  _uiohook       = null;
+  employeeData    = null;
+  sessionStart    = null;
+  _uiohookActive  = false;
+  _trackingActive = false;
+  lastWinTitle    = null;
+  _uiohook        = null;
+  mouseEvents     = 0;
+  keyEvents       = 0;
 
-  console.log("⏹ Tracking stopped");
+  console.log("[Activity] ✅ Tracking stopped");
 }
 
 export async function cleanupOnQuit() {

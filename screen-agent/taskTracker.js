@@ -1,35 +1,35 @@
-// ─────────────────────────────────────────────────────────────
 // taskAgent.js  —  Electron main process mein require karo
-//
-// Ye module har 30 seconds mein server ko batata hai:
-//   - Employee kaun sa app use kar raha hai
-//   - Kya woh kaam kar raha hai ya idle hai
+// ✅ FIXED: localhost hardcoding hataya, production backend use karta hai
 //
 // Setup (main.js mein):
 //   import { startTaskAgent } from "./taskAgent.js";
-//   startTaskAgent(employeeId);   // login ke baad call karo
-//   stopTaskAgent();              // logout pe
-// ─────────────────────────────────────────────────────────────
+//   startTaskAgent(employeeId, token);   // login ke baad call karo
+//   stopTaskAgent();                     // logout pe
 
-const BASE_URL = "http://localhost:5000"; // apna server URL
+// ✅ PRODUCTION CONFIG — env variable se URL lo, fallback production URL
+const BASE_URL = process.env.VITE_BACKEND_URL
+              || process.env.BACKEND_URL
+              || "https://workforce-backend-dusky.vercel.app";
+
 const INTERVAL = 30 * 1000; // 30 seconds
 
-let agentTimer   = null;
-let _employeeId  = null;
+console.log("[TaskAgent] Backend URL:", BASE_URL);
+
+let agentTimer  = null;
+let _employeeId = null;
+let _token      = null;   // ✅ Token add kiya — production auth ke liye zarori
 
 // ── Active window title get karna (cross-platform) ──
 async function getActiveWindow() {
   try {
-    // active-win npm package use karo:  npm install active-win
     const activeWin = await import("active-win");
     const win = await activeWin.default();
     if (!win) return { app: "", title: "" };
     return {
-      app:   win.owner?.name  || "",
-      title: win.title        || "",
+      app:   win.owner?.name || "",
+      title: win.title       || "",
     };
   } catch {
-    // active-win nahi hai — fallback
     return { app: "", title: "" };
   }
 }
@@ -37,9 +37,10 @@ async function getActiveWindow() {
 // ── Idle check (5 min idle = not working) ──
 function isUserIdle() {
   try {
-    const { powerMonitor } = require("electron");
-    const idleSecs = powerMonitor.getSystemIdleTime();
-    return idleSecs > 300; // 5 minutes
+    // ✅ Dynamic import — Electron context mein hi kaam karta hai
+    const electron = require("electron");
+    const idleSecs = electron.powerMonitor.getSystemIdleTime();
+    return idleSecs > 300;
   } catch {
     return false;
   }
@@ -59,40 +60,46 @@ async function pingServer() {
   };
 
   try {
-    const res = await fetch(`${BASE_URL}/api/tasks/agent/update`, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify(payload),
-    });
+    // ✅ fetch() ki jagah axios use karo — better error handling production mein
+    const { default: axios } = await import("axios");
 
-    if (!res.ok) {
-      console.warn(`[TaskAgent] Server error: ${res.status}`);
-      return;
-    }
+    const res = await axios.post(
+      `${BASE_URL}/api/tasks/agent/update`,
+      payload,
+      {
+        headers: {
+          "Content-Type": "application/json",
+          // ✅ Authorization header add kiya — production APIs ke liye zarori
+          ...(_token && { Authorization: `Bearer ${_token}` }),
+        },
+        timeout: 10000,
+      }
+    );
 
-    const data = await res.json();
+    const data = res.data;
     if (data.updated > 0) {
       console.log(`[TaskAgent] ${data.updated} tasks updated:`, data.changes);
     }
   } catch (err) {
-    // Server offline — silently ignore
-    console.warn("[TaskAgent] Ping failed (server offline?):", err.message);
+    // ✅ Better error info — URL aur status code dikhao
+    const status = err?.response?.status;
+    const msg    = err?.response?.data?.message || err.message;
+    console.warn(`[TaskAgent] Ping failed [${BASE_URL}] ${status ? `(HTTP ${status})` : "(network error)"}:`, msg);
   }
 }
 
-export function startTaskAgent(employeeId) {
+// ✅ Token parameter add kiya — auth ke liye
+export function startTaskAgent(employeeId, token) {
   if (!employeeId) {
     console.warn("[TaskAgent] employeeId nahi diya — agent start nahi hoga");
     return;
   }
   _employeeId = employeeId;
+  _token      = token || null;
 
-  // Foran ek ping karo
   pingServer();
-
-  // Phir har 30s pe
   agentTimer = setInterval(pingServer, INTERVAL);
-  console.log(`[TaskAgent] Started for employee: ${employeeId}`);
+  console.log(`[TaskAgent] Started for employee: ${employeeId} → ${BASE_URL}`);
 }
 
 export function stopTaskAgent() {
@@ -101,9 +108,11 @@ export function stopTaskAgent() {
     agentTimer = null;
   }
   _employeeId = null;
+  _token      = null;
   console.log("[TaskAgent] Stopped");
 }
 
-export function setTaskAgentEmployee(employeeId) {
+export function setTaskAgentEmployee(employeeId, token) {
   _employeeId = employeeId;
+  _token      = token || _token;
 }

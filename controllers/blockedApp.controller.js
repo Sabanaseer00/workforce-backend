@@ -2,11 +2,9 @@ import BlockedApp from "../models/BlockedApp.js";
 
 // ─────────────────────────────────────────────
 // Socket emit helper
-// req.app.get("io") — server.js mein app.set("io", ioInstance) se set hota hai
-// Yeh approach setIO() se better hai kyunki:
-//   - Koi separate import/export nahi
-//   - server.js mein koi extra call nahi
-//   - Express ka standard pattern hai
+// Dono events emit karta hai:
+//   1. "blocked_apps_updated" — admin dashboard ke liye (full list)
+//   2. "blockedSites:update"  — Electron client ke liye (real-time trigger)
 // ─────────────────────────────────────────────
 const emitUpdate = async (req) => {
   try {
@@ -15,9 +13,29 @@ const emitUpdate = async (req) => {
       console.warn("⚠️  Socket.io instance not found on app. Check server.js: app.set('io', ioInstance)");
       return;
     }
+
+    // Fetch latest blocked list
     const all = await BlockedApp.find({}).sort({ createdAt: -1 });
+
+    // 1️⃣ Admin dashboard — full list update
     io.emit("blocked_apps_updated", all);
     console.log(`📡 Emitted blocked_apps_updated — ${all.length} items`);
+
+    // 2️⃣ Electron desktop clients — triggers refreshAdminBlockedSites()
+    io.emit("blockedSites:update");
+    console.log(`📡 Emitted blockedSites:update — Electron clients will re-fetch`);
+
+    // 3️⃣ Browser clients (mobile/tablet) — send blocked identifiers list directly
+    const blockedDomains = all
+      .filter(a => a.isBlocked && a.type === "website")
+      .map(a => a.identifier);
+    const blockedRoutes = all
+      .filter(a => a.isBlocked && a.type === "internal")
+      .map(a => a.identifier);
+
+    io.emit("browser:blockedList", { domains: blockedDomains, routes: blockedRoutes });
+    console.log(`📡 Emitted browser:blockedList — ${blockedDomains.length} domains, ${blockedRoutes.length} routes`);
+
   } catch (err) {
     console.error("Socket emit error:", err.message);
   }
@@ -30,6 +48,45 @@ export const getAll = async (req, res) => {
   try {
     const apps = await BlockedApp.find({}).sort({ createdAt: -1 });
     res.json({ success: true, data: apps });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────
+// GET BLOCKED SITES LIST (for Electron / browser clients)
+// Returns only currently-blocked websites as a flat list
+// GET /api/blocked-apps/sites  ← Electron main.js is calling this
+// ─────────────────────────────────────────────
+export const getBlockedSites = async (req, res) => {
+  try {
+    const sites = await BlockedApp.find({ isBlocked: true, type: "website" })
+      .select("identifier name -_id")
+      .sort({ createdAt: -1 });
+
+    // Return both formats so any client can consume it
+    res.json({
+      success: true,
+      sites: sites.map(s => ({ domain: s.identifier, name: s.name })),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// ─────────────────────────────────────────────
+// GET BLOCKED LIST FOR BROWSER GUARD
+// Returns blocked domains + internal routes
+// GET /api/blocked-apps/browser-list
+// ─────────────────────────────────────────────
+export const getBrowserBlockList = async (req, res) => {
+  try {
+    const all = await BlockedApp.find({ isBlocked: true }).select("identifier type name -_id");
+
+    const domains = all.filter(a => a.type === "website").map(a => a.identifier);
+    const routes  = all.filter(a => a.type === "internal").map(a => a.identifier);
+
+    res.json({ success: true, domains, routes });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

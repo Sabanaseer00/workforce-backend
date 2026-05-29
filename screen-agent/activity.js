@@ -1,13 +1,16 @@
 // activity.js — Electron Agent ke liye Complete Activity Tracker
-// ✅ FIXED: localhost hardcoding hataya, production backend use karta hai
+// ✅ ALL BUGS FIXED:
+//   BUG 4 FIX: VITE_ prefix hata diya — main process mein kaam nahi karta
+//   BUG 5 FIX: uiohook-napi ke liye robust fallback — window-poll se activity estimate
 
 import activeWin from "active-win";
 import axios from "axios";
 
-// ✅ PRODUCTION CONFIG — env variable se URL lo, fallback production URL
-const BACKEND = process.env.VITE_BACKEND_URL
-             || process.env.BACKEND_URL
-             || "https://workforce-backend-dusky.vercel.app";
+// ✅ BUG 4 FIXED: VITE_ prefix remove kiya — Electron main process mein VITE_ vars undefined hote hain
+// .env mein BACKEND_URL set karo (VITE_BACKEND_URL nahi)
+const BACKEND =
+  process.env.BACKEND_URL ||
+  "https://workforce-backend-dusky.vercel.app";
 
 console.log("[Activity] Backend URL:", BACKEND);
 
@@ -42,7 +45,6 @@ const BLOCKED_APPS = [
 // ── State ──
 let employeeData   = null;
 let heartbeatTimer = null;
-let activityTimer  = null;
 
 let mouseEvents = 0;
 let keyEvents   = 0;
@@ -50,21 +52,49 @@ let keyEvents   = 0;
 let appUsageMap     = {};
 let currentAppStart = null;
 let lastApp         = "";
+let lastWinTitle    = "";   // ✅ BUG 5 FIX: window-poll fallback ke liye
 
-let _uiohook = null;
+let _uiohook        = null;
+let _uiohookActive  = false;
+let _pollTimer      = null; // ✅ BUG 5 FIX: fallback polling timer
 
+// ✅ BUG 5 FIXED: uiohook-napi packaged app mein silently fail hoti hai
+// Ab do-layer approach: pehle uiohook try karo, fail hone par window-poll fallback
 async function setupInputTracking() {
   try {
-    const { UiohookKey, uIOhook } = await import("uiohook-napi");
+    const { uIOhook } = await import("uiohook-napi");
     _uiohook = uIOhook;
     uIOhook.on("mousemove",  () => { mouseEvents++; });
     uIOhook.on("mouseclick", () => { mouseEvents++; });
     uIOhook.on("keydown",    () => { keyEvents++; });
     uIOhook.start();
+    _uiohookActive = true;
     console.log("✅ uiohook active — real mouse/keyboard tracking");
   } catch (e) {
-    console.log("⚠ uiohook not available — using window poll for activity estimate:", e.message);
+    console.log("⚠ uiohook not available — window-poll fallback active:", e.message);
+    _uiohookActive = false;
+    startWindowPollFallback();
   }
+}
+
+// ✅ BUG 5 FIX: Fallback — activeWin() se window switch detect karo
+// Window title change = user active hai; yeh uiohook ke baghair bhi kaam karta hai
+function startWindowPollFallback() {
+  if (_pollTimer) return;
+  _pollTimer = setInterval(async () => {
+    try {
+      const w = await activeWin();
+      if (!w) return;
+      const title = (w.title || "") + (w.owner?.name || "");
+      if (title && title !== lastWinTitle) {
+        // Window switch hua — user active maano
+        mouseEvents += 3;
+        keyEvents   += 2;
+        lastWinTitle = title;
+      }
+    } catch {}
+  }, 2000);
+  console.log("🔄 Window-poll fallback started (2s interval)");
 }
 
 function getSmartAppName(appName, windowTitle) {
@@ -90,7 +120,9 @@ function computeStatus(appName, windowTitle, mouseCount, keyCount) {
 
 function computeActivityPct(mouseCount, keyCount) {
   const total = mouseCount + keyCount;
-  return Math.min(100, Math.round((total / 20) * 100));
+  // ✅ uiohook nahi hai to threshold kam karo (window-poll counts are lower)
+  const threshold = _uiohookActive ? 20 : 8;
+  return Math.min(100, Math.round((total / threshold) * 100));
 }
 
 function updateAppUsage(newApp) {
@@ -137,7 +169,6 @@ function getTopApps() {
   }));
 }
 
-// ✅ FIXED: BACKEND variable use karta hai, timeout barhaya production ke liye
 async function sendHeartbeat() {
   if (!employeeData?.token || !employeeData?.id) return;
 
@@ -180,15 +211,14 @@ async function sendHeartbeat() {
       },
       {
         headers: { Authorization: `Bearer ${employeeData.token}` },
-        timeout: 10000,   // ✅ Production ke liye timeout barhaya
+        timeout: 10000,
       }
     );
 
     console.log(
-      `💓 Heartbeat | App: ${smartApp} | Status: ${status} | Activity: ${activityPct}% | Active: ${activeTime}`
+      `💓 Heartbeat | App: ${smartApp} | Status: ${status} | Activity: ${activityPct}% | Active: ${activeTime} | uiohook: ${_uiohookActive}`
     );
   } catch (err) {
-    // ✅ Better error logging — full URL dikhao taki debug asan ho
     console.error(
       `❌ Heartbeat error [${BACKEND}]:`,
       err?.response?.status,
@@ -204,6 +234,7 @@ export async function startTracking(empData) {
   mouseEvents     = 0;
   keyEvents       = 0;
   lastApp         = "";
+  lastWinTitle    = "";
   currentAppStart = new Date();
 
   console.log(`🟢 Tracking started for: ${empData.name} → ${BACKEND}`);
@@ -218,9 +249,9 @@ export async function stopTracking() {
   if (!employeeData) return;
 
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
-  if (activityTimer)  { clearInterval(activityTimer);  activityTimer  = null; }
+  if (_pollTimer)     { clearInterval(_pollTimer);     _pollTimer     = null; }
 
-  if (_uiohook) {
+  if (_uiohook && _uiohookActive) {
     try { _uiohook.stop(); } catch (e) {}
   }
 
@@ -238,8 +269,9 @@ export async function stopTracking() {
     console.error("Go-offline error:", err.message);
   }
 
-  employeeData = null;
-  sessionStart = null;
+  employeeData    = null;
+  sessionStart    = null;
+  _uiohookActive  = false;
   console.log("⏹ Tracking stopped");
 }
 

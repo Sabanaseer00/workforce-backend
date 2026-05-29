@@ -1,13 +1,14 @@
 // activity.js — Electron Agent ke liye Complete Activity Tracker
 // ✅ ALL BUGS FIXED:
-//   BUG 4 FIX: VITE_ prefix hata diya — main process mein kaam nahi karta
-//   BUG 5 FIX: uiohook-napi ke liye robust fallback — window-poll se activity estimate
+//   BUG 1 FIX: lastWinTitle initial value — first poll mismatch fix
+//   BUG 2 FIX: stopTracking() race condition — go-offline pehle, uiohook baad mein
+//   BUG 3 FIX: VITE_ prefix remove — Electron main process mein kaam nahi karta
+//   BUG 4 FIX: uiohook-napi robust fallback — window-poll se activity estimate
 
 import activeWin from "active-win";
 import axios from "axios";
 
-// ✅ BUG 4 FIXED: VITE_ prefix remove kiya — Electron main process mein VITE_ vars undefined hote hain
-// .env mein BACKEND_URL set karo (VITE_BACKEND_URL nahi)
+// ✅ BUG 3 FIXED: VITE_ prefix bilkul nahi — Electron main process mein undefined hote hain
 const BACKEND =
   process.env.BACKEND_URL ||
   "https://workforce-backend-dusky.vercel.app";
@@ -52,14 +53,17 @@ let keyEvents   = 0;
 let appUsageMap     = {};
 let currentAppStart = null;
 let lastApp         = "";
-let lastWinTitle    = "";   // ✅ BUG 5 FIX: window-poll fallback ke liye
+
+// ✅ BUG 1 FIXED: lastWinTitle ko null rakho "" nahi
+// "" se compare karne pe pehli poll hamesha match hoti thi — activity count skip hoti thi
+let lastWinTitle    = null;
 
 let _uiohook        = null;
 let _uiohookActive  = false;
-let _pollTimer      = null; // ✅ BUG 5 FIX: fallback polling timer
+let _pollTimer      = null;
 
-// ✅ BUG 5 FIXED: uiohook-napi packaged app mein silently fail hoti hai
-// Ab do-layer approach: pehle uiohook try karo, fail hone par window-poll fallback
+// ✅ BUG 4 FIXED: uiohook-napi packaged app mein silently fail hoti hai
+// Do-layer approach: pehle uiohook try karo, fail hone par window-poll fallback
 async function setupInputTracking() {
   try {
     const { uIOhook } = await import("uiohook-napi");
@@ -77,8 +81,8 @@ async function setupInputTracking() {
   }
 }
 
-// ✅ BUG 5 FIX: Fallback — activeWin() se window switch detect karo
-// Window title change = user active hai; yeh uiohook ke baghair bhi kaam karta hai
+// ✅ BUG 1 FIXED: lastWinTitle null check — pehli poll mein false positive avoid
+// Window title change = user active hai; uiohook ke baghair bhi kaam karta hai
 function startWindowPollFallback() {
   if (_pollTimer) return;
   _pollTimer = setInterval(async () => {
@@ -86,8 +90,15 @@ function startWindowPollFallback() {
       const w = await activeWin();
       if (!w) return;
       const title = (w.title || "") + (w.owner?.name || "");
+
+      // ✅ BUG 1 FIX: null check — pehli call pe lastWinTitle null hoga
+      // Initialize karo bina activity count kiye
+      if (lastWinTitle === null) {
+        lastWinTitle = title;
+        return;
+      }
+
       if (title && title !== lastWinTitle) {
-        // Window switch hua — user active maano
         mouseEvents += 3;
         keyEvents   += 2;
         lastWinTitle = title;
@@ -120,7 +131,7 @@ function computeStatus(appName, windowTitle, mouseCount, keyCount) {
 
 function computeActivityPct(mouseCount, keyCount) {
   const total = mouseCount + keyCount;
-  // ✅ uiohook nahi hai to threshold kam karo (window-poll counts are lower)
+  // uiohook nahi hai to threshold kam karo (window-poll counts are lower)
   const threshold = _uiohookActive ? 20 : 8;
   return Math.min(100, Math.round((total / threshold) * 100));
 }
@@ -234,7 +245,8 @@ export async function startTracking(empData) {
   mouseEvents     = 0;
   keyEvents       = 0;
   lastApp         = "";
-  lastWinTitle    = "";
+  // ✅ BUG 1 FIX: Reset to null on start — pehli poll mein false count avoid
+  lastWinTitle    = null;
   currentAppStart = new Date();
 
   console.log(`🟢 Tracking started for: ${empData.name} → ${BACKEND}`);
@@ -245,16 +257,16 @@ export async function startTracking(empData) {
   heartbeatTimer = setInterval(sendHeartbeat, 10000);
 }
 
+// ✅ BUG 2 FIXED: go-offline PEHLE bhejo — uiohook/timers baad mein band karo
+// Pehle uiohook band karne se network call kabhi nahi jaati thi (race condition)
 export async function stopTracking() {
   if (!employeeData) return;
 
+  // Step 1: Timers band karo — naye heartbeat nahi jayenge
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
   if (_pollTimer)     { clearInterval(_pollTimer);     _pollTimer     = null; }
 
-  if (_uiohook && _uiohookActive) {
-    try { _uiohook.stop(); } catch (e) {}
-  }
-
+  // Step 2: go-offline bhejo — employee data abhi bhi available hai
   try {
     await axios.post(
       `${BACKEND}/api/employees/go-offline`,
@@ -269,9 +281,16 @@ export async function stopTracking() {
     console.error("Go-offline error:", err.message);
   }
 
+  // Step 3: uiohook band karo — go-offline ke baad
+  if (_uiohook && _uiohookActive) {
+    try { _uiohook.stop(); } catch (e) {}
+  }
+
+  // Step 4: State clear karo
   employeeData    = null;
   sessionStart    = null;
   _uiohookActive  = false;
+  lastWinTitle    = null;
   console.log("⏹ Tracking stopped");
 }
 

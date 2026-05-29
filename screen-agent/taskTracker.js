@@ -1,15 +1,19 @@
-// taskAgent.js  —  Electron main process mein require karo
-// ✅ FIXED: localhost hardcoding hataya, production backend use karta hai
-//
-// Setup (main.js mein):
-//   import { startTaskAgent } from "./taskAgent.js";
-//   startTaskAgent(employeeId, token);   // login ke baad call karo
-//   stopTaskAgent();                     // logout pe
+// taskAgent.js  —  Electron main process mein import karo
+// ✅ ALL BUGS FIXED:
+//   BUG 1 FIX: VITE_BACKEND_URL priority hata di — main process mein undefined hota hai
+//   BUG 2 FIX: require("electron") ES module mein kaam nahi karta — pkg se powerMonitor lo
+//   BUG 3 FIX: axios dynamic import har ping pe nahi — top-level static import
+//   BUG 4 FIX: stopTaskAgent() me timer null check aur cleanup proper
 
-// ✅ PRODUCTION CONFIG — env variable se URL lo, fallback production URL
-const BASE_URL = process.env.VITE_BACKEND_URL
-              || process.env.BACKEND_URL
-              || "https://workforce-backend-dusky.vercel.app";
+// ✅ BUG 3 FIXED: Static import — dynamic import(axios) har 30s pe memory leak karta tha
+import axios from "axios";
+import pkg from "electron";
+
+// ✅ BUG 1 FIXED: VITE_ prefix hata diya — Electron main process mein VITE_ vars undefined hote hain
+// BACKEND_URL pehle check karo, VITE_ bilkul nahi
+const BASE_URL =
+  process.env.BACKEND_URL ||
+  "https://workforce-backend-dusky.vercel.app";
 
 const INTERVAL = 30 * 1000; // 30 seconds
 
@@ -17,7 +21,7 @@ console.log("[TaskAgent] Backend URL:", BASE_URL);
 
 let agentTimer  = null;
 let _employeeId = null;
-let _token      = null;   // ✅ Token add kiya — production auth ke liye zarori
+let _token      = null;
 
 // ── Active window title get karna (cross-platform) ──
 async function getActiveWindow() {
@@ -34,13 +38,13 @@ async function getActiveWindow() {
   }
 }
 
-// ── Idle check (5 min idle = not working) ──
+// ✅ BUG 2 FIXED: require("electron") ES module mein crash karta hai
+// pkg (electron default export) se powerMonitor lo — yahi main.js mein bhi use hota hai
 function isUserIdle() {
   try {
-    // ✅ Dynamic import — Electron context mein hi kaam karta hai
-    const electron = require("electron");
-    const idleSecs = electron.powerMonitor.getSystemIdleTime();
-    return idleSecs > 300;
+    const { powerMonitor } = pkg;
+    const idleSecs = powerMonitor.getSystemIdleTime();
+    return idleSecs > 300; // 5 min
   } catch {
     return false;
   }
@@ -60,16 +64,13 @@ async function pingServer() {
   };
 
   try {
-    // ✅ fetch() ki jagah axios use karo — better error handling production mein
-    const { default: axios } = await import("axios");
-
+    // ✅ BUG 3 FIXED: axios upar se import ho chuka hai — yahan seedha use karo
     const res = await axios.post(
       `${BASE_URL}/api/tasks/agent/update`,
       payload,
       {
         headers: {
           "Content-Type": "application/json",
-          // ✅ Authorization header add kiya — production APIs ke liye zarori
           ...(_token && { Authorization: `Bearer ${_token}` }),
         },
         timeout: 10000,
@@ -77,23 +78,32 @@ async function pingServer() {
     );
 
     const data = res.data;
-    if (data.updated > 0) {
+    if (data?.updated > 0) {
       console.log(`[TaskAgent] ${data.updated} tasks updated:`, data.changes);
     }
   } catch (err) {
-    // ✅ Better error info — URL aur status code dikhao
     const status = err?.response?.status;
     const msg    = err?.response?.data?.message || err.message;
-    console.warn(`[TaskAgent] Ping failed [${BASE_URL}] ${status ? `(HTTP ${status})` : "(network error)"}:`, msg);
+    console.warn(
+      `[TaskAgent] Ping failed [${BASE_URL}] ${status ? `(HTTP ${status})` : "(network error)"}:`,
+      msg
+    );
   }
 }
 
-// ✅ Token parameter add kiya — auth ke liye
+// ✅ Token parameter — production auth ke liye zarori
 export function startTaskAgent(employeeId, token) {
   if (!employeeId) {
     console.warn("[TaskAgent] employeeId nahi diya — agent start nahi hoga");
     return;
   }
+
+  // ✅ BUG 4 FIX: Agar pehle se chal raha hai to pehle band karo
+  if (agentTimer) {
+    clearInterval(agentTimer);
+    agentTimer = null;
+  }
+
   _employeeId = employeeId;
   _token      = token || null;
 
@@ -102,6 +112,7 @@ export function startTaskAgent(employeeId, token) {
   console.log(`[TaskAgent] Started for employee: ${employeeId} → ${BASE_URL}`);
 }
 
+// ✅ BUG 4 FIXED: Proper cleanup — null checks aur state reset
 export function stopTaskAgent() {
   if (agentTimer) {
     clearInterval(agentTimer);
@@ -114,5 +125,5 @@ export function stopTaskAgent() {
 
 export function setTaskAgentEmployee(employeeId, token) {
   _employeeId = employeeId;
-  _token      = token || _token;
+  if (token) _token = token;
 }

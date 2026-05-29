@@ -6,30 +6,30 @@ import activeWin from "active-win";
 import sharp from "sharp";
 import path from "path";
 import fs from "fs";
-import http from "http";
 import { execSync } from "child_process";
 import { fileURLToPath } from "url";
 
+// ✅ BUG 4 FIXED: dotenv load karo — VITE_ prefix main process mein kaam nahi karta
+import { config } from "dotenv";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
+config({ path: path.join(__dirname, ".env") });
 
 // ═══════════════════════════════════════════════════════════════════════
-//  ✅ PRODUCTION CONFIG — localhost hardcoding hataya gaya
-//  .env file mein set karo ya yahan seedha production URL likho
+//  PRODUCTION CONFIG
+//  .env mein BACKEND_URL set karo (VITE_BACKEND_URL nahi)
 // ═══════════════════════════════════════════════════════════════════════
-const BACKEND  = process.env.VITE_BACKEND_URL
-              || process.env.BACKEND_URL
-              || "https://workforce-backend-dusky.vercel.app";   // ← production default
+const BACKEND  = process.env.BACKEND_URL
+              || "https://workforce-backend-dusky.vercel.app";
 
-const FRONTEND = process.env.VITE_FRONTEND_URL
-              || process.env.FRONTEND_URL
-              || "https://your-frontend.vercel.app";             // ← apna frontend URL yahan likhein
+const FRONTEND = process.env.FRONTEND_URL
+              || "https://your-frontend.vercel.app";
 
 console.log("🌐 Backend URL:", BACKEND);
 console.log("🖥  Frontend URL:", FRONTEND);
 
 // ═══════════════════════════════════════════════════════════════════════
-//  🚫 DISTRACTION APPS LIST — sirf detect karne ke liye (flagging)
+//  FLAGGED APPS
 // ═══════════════════════════════════════════════════════════════════════
 const FLAGGED_APPS = [
   { name: "YouTube",   keywords: ["youtube"] },
@@ -43,7 +43,7 @@ const FLAGGED_APPS = [
 ];
 
 // ═══════════════════════════════════════════════════════════════════════
-//  🔥 DYNAMIC APP BLOCKER
+//  DYNAMIC APP BLOCKER
 // ═══════════════════════════════════════════════════════════════════════
 const HOSTS_FILE         = "C:\\Windows\\System32\\drivers\\etc\\hosts";
 const BLOCK_MARKER_START = "# WORKTRACK_BLOCK_START";
@@ -51,7 +51,6 @@ const BLOCK_MARKER_END   = "# WORKTRACK_BLOCK_END";
 
 let _adminBlockedSites = [];
 
-// ── Backend se admin-blocked sites fetch karo ──
 async function fetchAdminBlockedSites() {
   if (!employeeData?.token) return [];
   try {
@@ -177,43 +176,20 @@ function isSystemIdle(title) {
   return SYSTEM_IDLE_WINDOWS.some(p => tl.includes(p));
 }
 
-// ✅ ttApi ko BACKEND variable use karne ke liye update kiya
-function ttApi(apiPath, method = "GET", body = null) {
-  return new Promise((resolve, reject) => {
-    // Production mein https use karo
-    const backendUrl = new URL(BACKEND);
-    const isHttps    = backendUrl.protocol === "https:";
-    const httpMod    = isHttps ? (await import("https")).default : http;  // dynamic
-
-    const data    = body ? JSON.stringify(body) : null;
-    const options = {
-      hostname: backendUrl.hostname,
-      port:     backendUrl.port || (isHttps ? 443 : 80),
-      path:     "/api" + apiPath,
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        ...(_ttToken && { Authorization: `Bearer ${_ttToken}` }),
-        ...(data && { "Content-Length": Buffer.byteLength(data) }),
-      },
-    };
-
-    // ✅ Axios se replace kiya — http/https module ke liye cleaner
-    axios({
-      method:  method.toLowerCase(),
-      url:     `${BACKEND}/api${apiPath}`,
-      data:    body || undefined,
-      headers: {
-        "Content-Type": "application/json",
-        ...(_ttToken && { Authorization: `Bearer ${_ttToken}` }),
-      },
-      timeout: 8000,
-    })
-      .then(res  => resolve(res.status === 204 ? null : res.data))
-      .catch(err => reject(new Error(
-        `HTTP ${err.response?.status || "?"}: ${JSON.stringify(err.response?.data || err.message).slice(0, 200)}`
-      )));
+// ✅ BUG 1 FIXED: ttApi ko pure async function banaya — await Promise constructor ke
+//    andar nahi ho sakta. http module bhi hata diya, seedha axios use karta hai.
+async function ttApi(apiPath, method = "GET", body = null) {
+  const res = await axios({
+    method:  method.toLowerCase(),
+    url:     `${BACKEND}/api${apiPath}`,
+    data:    body || undefined,
+    headers: {
+      "Content-Type": "application/json",
+      ...(_ttToken && { Authorization: `Bearer ${_ttToken}` }),
+    },
+    timeout: 8000,
   });
+  return res.status === 204 ? null : res.data;
 }
 
 async function ttFetch() {
@@ -328,7 +304,9 @@ async function ttCheck() {
   } catch (e) { console.log("[TT] check error:", e.message); }
 }
 
-// ✅ Socket URL bhi BACKEND variable se
+// ✅ BUG 3 NOTE: Socket.IO Vercel pe persistent connection nahi bana sakta.
+//    Agar backend Vercel pe hai to SOCKET_URL alag server (Railway/Render) ka
+//    set karo — warna socket silently fail hoga aur polling fallback kaam karega.
 async function ttSocketConnect() {
   try {
     let ioFn;
@@ -336,10 +314,15 @@ async function ttSocketConnect() {
       const m = await import("socket.io-client");
       ioFn = m.io || m.default;
     } catch {
-      console.log("[TT] socket.io-client not installed");
+      console.log("[TT] socket.io-client not installed — skipping socket");
       return;
     }
-    _ttSocket = ioFn(BACKEND, {
+
+    // ✅ Alag SOCKET_URL use karo agar available ho (Vercel ke liye zaroori)
+    const socketUrl = process.env.SOCKET_URL || BACKEND;
+    console.log("[TT] Connecting socket to:", socketUrl);
+
+    _ttSocket = ioFn(socketUrl, {
       transports: ["websocket", "polling"],
       auth: { token: _ttToken },
       reconnection: true,
@@ -347,12 +330,12 @@ async function ttSocketConnect() {
       reconnectionDelay: 3000,
     });
     _ttSocket.on("connect", () => {
-      console.log("[TT] Socket connected to:", BACKEND);
+      console.log("[TT] Socket connected to:", socketUrl);
       _ttSocket.emit("join", `emp_${_ttEmpId}`);
       _ttSocket.emit("join", "admins");
     });
-    _ttSocket.on("task:new",    ()  => { ttFetch(); });
-    _ttSocket.on("task:update", p   => {
+    _ttSocket.on("task:new",    () => { ttFetch(); });
+    _ttSocket.on("task:update", p  => {
       _ttTasks = _ttTasks.map(t =>
         String(t._id || t.id) === String(p._id || p.taskId) ? { ...t, ...p } : t
       );
@@ -502,7 +485,6 @@ function doLogin() {
   fs.writeFileSync(tmpPath, loginHTML);
   loginWin.loadFile(tmpPath);
 
-  // ✅ Login window ko backend URL bhejo (debug ke liye)
   loginWin.webContents.on("did-finish-load", () => {
     loginWin?.webContents.send("backend-url", BACKEND);
   });
@@ -518,12 +500,10 @@ function createMainWindow() {
     width: 1200, height: 800,
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
-  // ✅ Localhost se production frontend pe switch kiya
   mainWin.loadURL(FRONTEND);
   console.log("🖥  Main window loading:", FRONTEND);
 }
 
-// ✅ Heartbeat bhi BACKEND variable use karta hai (axios ke through already sahi tha)
 async function sendHeartbeat(activeApp, windowTitle, mouseEvents, keyEvents) {
   if (!employeeData?.id || !employeeData?.token) return;
   try {
@@ -558,6 +538,31 @@ async function takeScreenshot() {
   return await sharp(sources[0].thumbnail.toPNG()).jpeg({ quality: 60 }).toBuffer();
 }
 
+// ✅ BUG 2 FIXED: Base64 Vercel ko mat bhejo — seedha Cloudinary upload karo,
+//    sirf URL backend ko bhejo. Vercel ka 4.5MB body limit bypass hota hai.
+async function uploadScreenshotToCloudinary(jpegBuffer) {
+  const CLOUD_NAME   = process.env.CLOUDINARY_CLOUD_NAME;
+  const UPLOAD_PRESET = process.env.CLOUDINARY_UPLOAD_PRESET; // unsigned preset
+
+  if (!CLOUD_NAME || !UPLOAD_PRESET) {
+    // Fallback: agar Cloudinary setup nahi to base64 try karo (dev mein)
+    console.warn("⚠️ Cloudinary env vars missing — base64 fallback (may fail on Vercel)");
+    return "data:image/jpeg;base64," + jpegBuffer.toString("base64");
+  }
+
+  const { default: FormData } = await import("form-data");
+  const form = new FormData();
+  form.append("file", jpegBuffer, { filename: "screenshot.jpg", contentType: "image/jpeg" });
+  form.append("upload_preset", UPLOAD_PRESET);
+
+  const res = await axios.post(
+    `https://api.cloudinary.com/v1_1/${CLOUD_NAME}/image/upload`,
+    form,
+    { headers: form.getHeaders(), timeout: 20000 }
+  );
+  return res.data.secure_url;
+}
+
 async function captureScreen() {
   if (!employeeData) return;
   try {
@@ -569,7 +574,8 @@ async function captureScreen() {
 
     await sendHeartbeat(smartApp, windowTitle, 5, 3);
 
-    const base64 = "data:image/jpeg;base64," + (await takeScreenshot()).toString("base64");
+    // ✅ BUG 2 FIXED: Cloudinary se URL lo, base64 nahi
+    const imageUrl = await uploadScreenshotToCloudinary(await takeScreenshot());
 
     await axios.post(
       `${BACKEND}/api/screenshots/live`,
@@ -582,7 +588,7 @@ async function captureScreen() {
         app:          smartApp,
         windowTitle,
         rawApp:       rawAppName,
-        imageUrl:     base64,
+        imageUrl,       // ✅ Ab URL hai, 4.5MB base64 nahi
         isBlocked:    isFlagged,
         blockedApp:   flaggedAppName,
         time:         new Date().toLocaleTimeString(),
@@ -593,7 +599,7 @@ async function captureScreen() {
       },
       {
         headers: { Authorization: `Bearer ${employeeData.token}` },
-        timeout: 15000,   // ✅ Production mein thoda zyada timeout
+        timeout: 15000,
       }
     );
 

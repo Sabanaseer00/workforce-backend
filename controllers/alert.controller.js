@@ -304,7 +304,11 @@ export const detectAnomalies = async (shotData) => {
 // Add in server.js: setInterval(checkScreenshotGaps, 5 * 60 * 1000);
 export const checkScreenshotGaps = async () => {
   try {
+<<<<<<< HEAD
     const Screenshot = (await import("../models/screenshot.js")).default;
+=======
+    const Screenshot = (await import("../models/Screenshot.js")).default;
+>>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
     const Employee   = (await import("../models/Employee.js")).default;
 
     const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000);

@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 // ─────────────────────────────────────────────────────────────
 // taskAgent.js  —  Electron main process mein require karo
 //
@@ -30,16 +31,46 @@ async function getActiveWindow() {
     };
   } catch {
     // active-win nahi hai — fallback
+=======
+// taskAgent.js — Task status auto-updater
+import axios from "axios";
+import pkg   from "electron";
+
+const BASE_URL =
+  process.env.BACKEND_URL ||
+  "https://workforce-backend-production-cc13.up.railway.app";
+
+const INTERVAL = 30_000;
+console.log("[TaskAgent] Backend:", BASE_URL);
+
+let agentTimer  = null;
+let _employeeId = null;
+let _token      = null;
+
+async function getActiveWindow() {
+  try {
+    const m   = await import("active-win");
+    const win = await m.default();
+    return { app: win?.owner?.name || "", title: win?.title || "" };
+  } catch {
+>>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
     return { app: "", title: "" };
   }
 }
 
+<<<<<<< HEAD
 // ── Idle check (5 min idle = not working) ──
 function isUserIdle() {
   try {
     const { powerMonitor } = require("electron");
     const idleSecs = powerMonitor.getSystemIdleTime();
     return idleSecs > 300; // 5 minutes
+=======
+function isUserIdle() {
+  try {
+    const { powerMonitor } = pkg;
+    return powerMonitor.getSystemIdleTime() > 300;
+>>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
   } catch {
     return false;
   }
@@ -47,6 +78,7 @@ function isUserIdle() {
 
 async function pingServer() {
   if (!_employeeId) return;
+<<<<<<< HEAD
 
   const { app, title } = await getActiveWindow();
   const idle           = isUserIdle();
@@ -106,4 +138,43 @@ export function stopTaskAgent() {
 
 export function setTaskAgentEmployee(employeeId) {
   _employeeId = employeeId;
+=======
+  const { app, title } = await getActiveWindow();
+  try {
+    const res = await axios.post(
+      `${BASE_URL}/api/tasks/agent/update`,
+      { employeeId: _employeeId, activeApp: app, windowTitle: title, isWorking: !isUserIdle() },
+      {
+        headers: { "Content-Type": "application/json", ...(_token && { Authorization: `Bearer ${_token}` }) },
+        timeout: 10_000,
+      }
+    );
+    if (res.data?.updated > 0)
+      console.log(`[TaskAgent] ${res.data.updated} tasks updated`);
+  } catch (err) {
+    console.warn(`[TaskAgent] Ping failed:`, err?.response?.status || err.message);
+  }
+}
+
+export function startTaskAgent(employeeId, token) {
+  if (!employeeId) { console.warn("[TaskAgent] No employeeId"); return; }
+  if (agentTimer)  { clearInterval(agentTimer); agentTimer = null; }
+  _employeeId = String(employeeId);
+  _token      = token || null;
+  pingServer();
+  agentTimer = setInterval(pingServer, INTERVAL);
+  console.log(`[TaskAgent] Started: ${_employeeId}`);
+}
+
+export function stopTaskAgent() {
+  if (agentTimer) { clearInterval(agentTimer); agentTimer = null; }
+  _employeeId = null;
+  _token      = null;
+  console.log("[TaskAgent] Stopped");
+}
+
+export function setTaskAgentEmployee(employeeId, token) {
+  _employeeId = employeeId ? String(employeeId) : null;
+  if (token) _token = token;
+>>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
 }

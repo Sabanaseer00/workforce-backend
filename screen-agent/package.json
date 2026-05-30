@@ -1,23 +1,24 @@
 {
-  "name": "worktrack-agent",
+  "name": "screen-agent",
   "version": "1.0.0",
-  "description": "WorkTrack Employee Monitoring Agent",
-  "main": "main.js",
+  "description": "",
+  "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "electron .",
-    "dev":   "electron ."
+    "dev": "electron ."
   },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
   "dependencies": {
-    "active-win":          "^8.2.1",
-    "axios":               "^1.15.2",
-    "dotenv":              "^16.4.5",
-    "screenshot-desktop":  "^1.0.0",
-    "sharp":               "^0.34.5",
-    "socket.io-client":    "^4.8.3",
-    "uiohook-napi":        "^1.5.2"
+    "active-win": "^8.2.1",
+    "axios": "^1.15.2",
+    "screenshot-desktop": "^1.0.0",
+    "sharp": "^0.34.5",
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^41.3.0"
   }
 }

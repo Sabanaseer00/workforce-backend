@@ -1,51 +1,16 @@
 // ═══════════════════════════════════════════════════════
-//  controllers/Emptask.controller.js
+//  controllers/empTask.controller.js
 //  Employee apni tasks dekhta aur status update karta hai
 // ═══════════════════════════════════════════════════════
-import Task     from "../models/Task.js";
-import Employee from "../models/Employee.js";
-
-// ── Helper: req.user se Employee record nikalo ──────────
-// Problem: auth middleware pehle User collection check karta hai.
-// Agar Employee aur User dono collections mein same email hai,
-// toh req.user User ka document hoga jiska _id Employee._id se
-// alag hoga. Task.assigned_to mein Employee._id stored hai,
-// isliye hamesha Employee collection se match karo.
-async function getEmployee(req) {
-  // Case 1: req.user already Employee collection ka document hai
-  //         (email field check karo — Employee model mein email hai)
-  // Case 2: req.user User collection ka document hai —
-  //         email se Employee dhundo
-  const email = req.user?.email;
-  const uid   = req.user?._id;
-
-  if (!email && !uid) return null;
-
-  // Pehle _id se try karo (agar directly Employee se login hua)
-  let employee = await Employee.findById(uid).lean();
-
-  // Agar nahi mila toh email se dhundo
-  if (!employee && email) {
-    employee = await Employee.findOne({ email }).lean();
-  }
-
-  return employee;
-}
+import Task from "../models/Task.js";
 
 // ════════════════════════════════════════════════════════
 //  GET /api/emp/tasks
-//  Sirf logged-in employee ki assigned tasks
+//  Employee apni assigned tasks dekhta hai
 // ════════════════════════════════════════════════════════
 export const getMyTasks = async (req, res) => {
   try {
-    const employee = await getEmployee(req);
-
-    if (!employee) {
-      return res.status(404).json({ message: "Employee record nahi mila" });
-    }
-
-    // Task.assigned_to mein Employee._id stored hai
-    const tasks = await Task.find({ assigned_to: employee._id })
+    const tasks = await Task.find({ assigned_to: req.user._id })
       .sort({ createdAt: -1 });
 
     const total     = tasks.length;
@@ -66,21 +31,15 @@ export const getMyTasks = async (req, res) => {
 
 // ════════════════════════════════════════════════════════
 //  PATCH /api/emp/tasks/:id/status
-//  Employee apni task ka status update kare
+//  Employee apni task ka status update karta hai
 // ════════════════════════════════════════════════════════
 export const updateMyTaskStatus = async (req, res) => {
   try {
-    const employee = await getEmployee(req);
-
-    if (!employee) {
-      return res.status(404).json({ message: "Employee record nahi mila" });
-    }
-
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ message: "Task not found" });
 
-    // Security: sirf apni task update kar sakta hai
-    if (task.assigned_to?.toString() !== employee._id.toString()) {
+    // Security — sirf apni task
+    if (task.assigned_to.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: "Yeh aapki task nahi hai" });
     }
 
@@ -95,15 +54,13 @@ export const updateMyTaskStatus = async (req, res) => {
     if (status === "completed"   && !task.completed_at) {
       task.completed_at = new Date();
       if (task.started_at)
-        task.time_spent_mins = Math.max(1, Math.round(
-          (task.completed_at - task.started_at) / 60000
-        ));
+        task.time_spent_mins = Math.max(1, Math.round((task.completed_at - task.started_at) / 60000));
     }
 
     if (!task.activity_log) task.activity_log = [];
     task.activity_log.push({
       status,
-      changed_by: employee._id,
+      changed_by: req.user._id,
       changed_at: new Date(),
       note: note || `Status changed to ${status}`,
     });

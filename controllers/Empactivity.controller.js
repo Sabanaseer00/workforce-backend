@@ -36,8 +36,11 @@ export const getMyActivity = async (req, res) => {
       .limit(parseInt(limit));
 
     // ── Stats calculate karo ──
-    const totalMins = activities.reduce((s, a) => s + (a.duration || 1), 0);
-    const avgPct    = activities.length
+    // FIX: duration = heartbeat units, 6 units = 1 minute (1 heartbeat ≈ 10 seconds)
+    const totalDurationUnits = activities.reduce((s, a) => s + (a.duration || 1), 0);
+    const totalMins = Math.round(totalDurationUnits / 6);
+
+    const avgPct = activities.length
       ? Math.round(activities.reduce((s, a) => s + (a.pct || 0), 0) / activities.length)
       : 0;
 
@@ -47,10 +50,12 @@ export const getMyActivity = async (req, res) => {
       if (!a.app || a.app === "Unknown") return;
       appMap[a.app] = (appMap[a.app] || 0) + (a.duration || 1);
     });
+
+    // FIX: appMap values bhi heartbeat units hain, /6 karo
     const topApps = Object.entries(appMap)
       .sort((x, y) => y[1] - x[1])
       .slice(0, 5)
-      .map(([name, mins]) => ({ name, mins }));
+      .map(([name, units]) => ({ name, mins: Math.round(units / 6) }));
 
     res.json({
       activities,

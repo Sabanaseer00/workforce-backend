@@ -1,12 +1,8 @@
 import { Server } from "socket.io";
+import jwt from "jsonwebtoken";
 
 let io;
 
-<<<<<<< HEAD
-export const initSocket = (httpServer) => {
-  io = new Server(httpServer, {
-    cors: { origin: "*", methods: ["GET", "POST", "PATCH", "PUT", "DELETE"] },
-=======
 const ALLOWED_ORIGINS = [
   "https://workforce-frontend-ten.vercel.app",
   "https://workforce-productivity-5163.vercel.app",
@@ -34,7 +30,6 @@ export const initSocket = (httpServer) => {
       methods: ["GET", "POST", "PATCH", "PUT", "DELETE"],
       credentials: true,
     },
->>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
   });
 
   io.on("connection", (socket) => {
@@ -46,42 +41,10 @@ export const initSocket = (httpServer) => {
       console.log(`📌 ${socket.id} joined: ${roomId}`);
     });
 
-<<<<<<< HEAD
-    // ✅ FIX — App.jsx se "join_room" emit hota hai, yahan handle karo
-    // BlockedAppProvider mein: socket.emit("join_room", role || "employee")
-=======
     // App.jsx se "join_room" emit hota hai (role = "admin" | "employee")
->>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
     socket.on("join_room", (role) => {
       socket.join(role);
-      console.log(`🔐 Socket joined role room: ${role}`);
-    });
-
-<<<<<<< HEAD
-    // Employee apne room mein join hota hai
-=======
-    // Employee apne room mein join hota hai (JWT se empId nikalta hai)
->>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
-    socket.on("join_employee", () => {
-      const token = socket.handshake.auth?.token;
-      if (token) {
-        try {
-          const payload = JSON.parse(
-            Buffer.from(token.split(".")[1], "base64").toString()
-          );
-          const empId = payload.id || payload._id || payload.userId;
-          if (empId) {
-            socket.join(`emp_${empId}`);
-            console.log(`👤 Employee ${empId} joined room`);
-          }
-<<<<<<< HEAD
-        } catch {}
-=======
-        } catch {
-          console.warn("⚠️ join_employee: invalid token");
-        }
->>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
-      }
+      console.log(`📍 ${socket.id} joined room: ${role}`);
     });
 
     // Electron agent → admin ko task update forward karo
@@ -91,11 +54,7 @@ export const initSocket = (httpServer) => {
       io.to("admins").emit("task:update", payload);
     });
 
-<<<<<<< HEAD
-    // Heartbeat
-=======
     // Heartbeat — employee ka live status admin ko bhejo
->>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
     socket.on("employee:heartbeat", (data) => {
       io.to("admins").emit("employee:update", {
         employeeId:      data.employeeId,
@@ -131,11 +90,14 @@ export const initSocket = (httpServer) => {
     });
 
     socket.on("disconnect", () => {
-      console.log("❌ Socket disconnected:", socket.id);
+      console.log("🔌 Socket disconnected:", socket.id);
     });
   });
 
   return io;
 };
 
-export const getIO = () => io;
+export const getIO = () => {
+  if (!io) throw new Error("Socket.io not initialized!");
+  return io;
+};

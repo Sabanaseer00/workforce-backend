@@ -1,61 +1,46 @@
-// main.js — WorkTrack Electron Agent
-// ✅ FIXES:
-//   FIX 1: dotenv load kiya — warna BACKEND_URL undefined hota hai
-//   FIX 2: desktopCapturer hata diya — screenshot-desktop use karo (package.json mein yahi hai)
-//   FIX 3: PowerShell screenshot — packaged app mein screenshot-desktop fail hota tha
-//   FIX 4: activity.js + taskAgent.js import — duplicate tracking logic nahi
-//   FIX 5: admin privilege check — hosts/firewall gracefully skip if not admin
-//   FIX 6: PATH fix — screenshot-desktop ke liye cmd.exe milna zarori hai
-//   FIX 7: taskAgent 404 — endpoint /api/tasks/agent/ping pe fallback
-
 import pkg from "electron";
-const { app, BrowserWindow, ipcMain } = pkg;
+const { app, BrowserWindow, ipcMain, desktopCapturer } = pkg;
 
-import axios      from "axios";
-import sharp      from "sharp";
-import activeWin  from "active-win";
-import path       from "path";
-import fs         from "fs";
-import os         from "os";
+import axios     from "axios";
+import activeWin from "active-win";
+import sharp     from "sharp";
+import path      from "path";
+import fs        from "fs";
 import { execSync }      from "child_process";
 import { fileURLToPath } from "url";
+import { config }        from "dotenv";
 
-// ✅ FIX 1: dotenv — yeh SABSE PEHLE load hona chahiye
-import { config } from "dotenv";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 config({ path: path.join(__dirname, ".env") });
 
-// ✅ FIX 4: activity + taskAgent import
 import { startTracking, stopTracking } from "./activity.js";
 import { startTaskAgent, stopTaskAgent } from "./Taskagent.js";
 
-// ── Config ─────────────────────────────────────────────────────────────
 const BACKEND  = process.env.BACKEND_URL  || "https://workforce-backend-production-cc13.up.railway.app";
 const FRONTEND = process.env.FRONTEND_URL || "https://workforce-frontend-ten.vercel.app";
 console.log("🌐 Backend :", BACKEND);
 console.log("🖥  Frontend:", FRONTEND);
 
-// ── Flagged Apps ───────────────────────────────────────────────────────
+// ── Flagged Apps ──
 const FLAGGED_APPS = [
-  { name: "YouTube",   keywords: ["youtube"]          },
-  { name: "Facebook",  keywords: ["facebook"]         },
-  { name: "TikTok",    keywords: ["tiktok"]           },
-  { name: "Instagram", keywords: ["instagram"]        },
-  { name: "Twitter",   keywords: ["twitter","x.com"]  },
-  { name: "Netflix",   keywords: ["netflix"]          },
-  { name: "WhatsApp",  keywords: ["whatsapp"]         },
-  { name: "Snapchat",  keywords: ["snapchat"]         },
+  { name: "YouTube",   keywords: ["youtube"] },
+  { name: "Facebook",  keywords: ["facebook"] },
+  { name: "TikTok",    keywords: ["tiktok"] },
+  { name: "Instagram", keywords: ["instagram"] },
+  { name: "Twitter",   keywords: ["twitter", "x.com"] },
+  { name: "Netflix",   keywords: ["netflix"] },
+  { name: "WhatsApp",  keywords: ["whatsapp"] },
+  { name: "Snapchat",  keywords: ["snapchat"] },
 ];
 
-// ── Site Blocking ──────────────────────────────────────────────────────
+// ── Site Blocking ──
 const HOSTS_FILE         = "C:\\Windows\\System32\\drivers\\etc\\hosts";
 const BLOCK_MARKER_START = "# WORKTRACK_BLOCK_START";
 const BLOCK_MARKER_END   = "# WORKTRACK_BLOCK_END";
-let _adminBlockedSites   = [];
-let _isAdminMode         = false;
+let _adminBlockedSites = [];
+let _isAdminMode       = false;
 
-// ✅ FIX 5: Admin check — non-admin pe graceful skip
 function checkAdminPrivileges() {
   try {
     execSync("net session", { stdio: "ignore" });
@@ -87,9 +72,9 @@ async function fetchAdminBlockedSites() {
 function applyHostsBlock(sites) {
   if (!_isAdminMode) return;
   try {
-    let content  = fs.readFileSync(HOSTS_FILE, "utf8");
-    const si     = content.indexOf(BLOCK_MARKER_START);
-    const ei     = content.indexOf(BLOCK_MARKER_END);
+    let content = fs.readFileSync(HOSTS_FILE, "utf8");
+    const si    = content.indexOf(BLOCK_MARKER_START);
+    const ei    = content.indexOf(BLOCK_MARKER_END);
     if (si !== -1 && ei !== -1)
       content = content.slice(0, si).trimEnd() + "\n" + content.slice(ei + BLOCK_MARKER_END.length);
     content = content.trim();
@@ -144,35 +129,41 @@ function unblockEverything() {
   _adminBlockedSites = [];
 }
 
-// ── ✅ FIX 3: PowerShell Screenshot — packaged app mein kaam karta hai ──
-async function takeScreenshotPowerShell() {
-  const tmpFile = path.join(os.tmpdir(), `wt_ss_${Date.now()}.png`);
-  const escapedPath = tmpFile.replace(/\\/g, "\\\\");
-
-  const ps = [
-    "Add-Type -AssemblyName System.Windows.Forms;",
-    "Add-Type -AssemblyName System.Drawing;",
-    "$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;",
-    "$bmp = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height);",
-    "$g = [System.Drawing.Graphics]::FromImage($bmp);",
-    "$g.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size);",
-    `$bmp.Save('${escapedPath}');`,
-    "$g.Dispose();",
-    "$bmp.Dispose();",
-  ].join(" ");
-
-  execSync(
-    `powershell -NonInteractive -WindowStyle Hidden -Command "${ps}"`,
-    { timeout: 15000 }
-  );
-
-  const buffer = fs.readFileSync(tmpFile);
-  try { fs.unlinkSync(tmpFile); } catch {}
-  return buffer;
+// ── Screenshot — desktopCapturer (Electron built-in) + sharp ──
+async function takeScreenshot() {
+  const sources = await desktopCapturer.getSources({
+    types: ["screen"],
+    thumbnailSize: { width: 1280, height: 720 },
+  });
+  if (!sources || sources.length === 0) throw new Error("No screen source");
+  return await sharp(sources[0].thumbnail.toPNG())
+    .jpeg({ quality: 60 })
+    .toBuffer();
 }
 
-// ── Screenshot — PowerShell + sharp compress ───────────────────────────
-async function takeAndSendScreenshot() {
+function getSmartAppName(appName, windowTitle) {
+  const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
+  for (const b of FLAGGED_APPS)
+    if (b.keywords.some(k => combined.includes(k))) return b.name;
+  const isBrowser = ["chrome","edge","firefox","brave","opera"].some(b =>
+    (appName || "").toLowerCase().includes(b)
+  );
+  if (isBrowser && windowTitle) {
+    const p = windowTitle.split(" - ");
+    return p.length >= 2 ? p[0].trim() : windowTitle.split(" | ")[0].trim();
+  }
+  return appName || "Unknown App";
+}
+
+function getFlaggedInfo(appName, windowTitle) {
+  const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
+  for (const b of FLAGGED_APPS)
+    if (b.keywords.some(k => combined.includes(k)))
+      return { isFlagged: true, flaggedAppName: b.name };
+  return { isFlagged: false, flaggedAppName: null };
+}
+
+async function captureScreen() {
   if (!employeeData) return;
   try {
     const aw          = await activeWin().catch(() => null);
@@ -181,29 +172,9 @@ async function takeAndSendScreenshot() {
     const smartApp    = getSmartAppName(rawAppName, windowTitle);
     const { isFlagged, flaggedAppName } = getFlaggedInfo(rawAppName, windowTitle);
 
-    // ✅ FIX 6: PATH fix — System32 zarori hai
-    const sys32 = "C:\\Windows\\System32";
-    if (!process.env.PATH?.includes(sys32)) {
-      process.env.PATH = (process.env.PATH || "") + ";" + sys32;
-    }
-
-    // ✅ FIX 3: PowerShell se screenshot lo — packaged app mein reliable hai
-    let rawBuffer;
-    try {
-      rawBuffer = await takeScreenshotPowerShell();
-      console.log("📸 PowerShell screenshot success");
-    } catch (psErr) {
-      console.error("❌ PowerShell screenshot failed:", psErr.message);
-      return; // skip this cycle
-    }
-
-    const compressed = await sharp(rawBuffer)
-      .resize({ width: 1280, withoutEnlargement: true })
-      .jpeg({ quality: 50 })
-      .toBuffer();
-
-    const base64 = "data:image/jpeg;base64," + compressed.toString("base64");
-    console.log(`📸 Screenshot: ~${Math.round(compressed.length / 1024)}KB`);
+    const imgBuffer = await takeScreenshot();
+    const base64    = "data:image/jpeg;base64," + imgBuffer.toString("base64");
+    console.log(`📸 Screenshot: ~${Math.round(imgBuffer.length / 1024)}KB`);
 
     await axios.post(
       `${BACKEND}/api/screenshots/live`,
@@ -240,43 +211,17 @@ async function takeAndSendScreenshot() {
   }
 }
 
-// ── App name helpers ───────────────────────────────────────────────────
-function getSmartAppName(appName, windowTitle) {
-  const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
-  for (const b of FLAGGED_APPS)
-    if (b.keywords.some(k => combined.includes(k))) return b.name;
-  const isBrowser = ["chrome","edge","firefox","brave","opera"].some(b =>
-    (appName || "").toLowerCase().includes(b)
-  );
-  if (isBrowser && windowTitle) {
-    const p = windowTitle.split(" - ");
-    return p.length >= 2 ? p[0].trim() : windowTitle.split(" | ")[0].trim();
-  }
-  return appName || "Unknown App";
-}
-
-function getFlaggedInfo(appName, windowTitle) {
-  const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
-  for (const b of FLAGGED_APPS)
-    if (b.keywords.some(k => combined.includes(k)))
-      return { isFlagged: true, flaggedAppName: b.name };
-  return { isFlagged: false, flaggedAppName: null };
-}
-
-// ── Screenshot loop ────────────────────────────────────────────────────
 let captureInterval = null;
-
 function startCapture() {
   if (captureInterval) clearInterval(captureInterval);
-  takeAndSendScreenshot();
-  captureInterval = setInterval(takeAndSendScreenshot, 30_000);
+  captureScreen();
+  captureInterval = setInterval(captureScreen, 30_000);
 }
-
 function stopCapture() {
   if (captureInterval) { clearInterval(captureInterval); captureInterval = null; }
 }
 
-// ── Token / Auth helpers ───────────────────────────────────────────────
+// ── Token helpers ──
 let mainWin      = null;
 let loginWin     = null;
 let employeeData = null;
@@ -293,12 +238,9 @@ function loadSavedToken() {
   } catch {}
   return null;
 }
-function saveToken(data) {
-  try { if (TOKEN_FILE) fs.writeFileSync(TOKEN_FILE, JSON.stringify(data), "utf8"); } catch {}
-}
-function clearToken() {
-  try { if (TOKEN_FILE && fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE); } catch {}
-}
+function saveToken(data)  { try { if (TOKEN_FILE) fs.writeFileSync(TOKEN_FILE, JSON.stringify(data), "utf8"); } catch {} }
+function clearToken()     { try { if (TOKEN_FILE && fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE); } catch {} }
+
 async function validateToken(token) {
   try {
     const res = await axios.get(`${BACKEND}/api/auth/me`, {
@@ -306,12 +248,10 @@ async function validateToken(token) {
       timeout: 8000,
     });
     return res.data;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-// ── Login Window ───────────────────────────────────────────────────────
+// ── Login Window ──
 function createLoginWindow() {
   loginWin = new BrowserWindow({
     width: 420, height: 520, resizable: false, center: true,
@@ -395,7 +335,7 @@ function createMainWindow() {
   mainWin.on("closed", () => { mainWin = null; });
 }
 
-// ── Session ────────────────────────────────────────────────────────────
+// ── Session ──
 async function startSession() {
   startCapture();
   await startTracking(employeeData);
@@ -411,7 +351,7 @@ async function stopSession() {
   unblockEverything();
 }
 
-// ── IPC ────────────────────────────────────────────────────────────────
+// ── IPC ──
 ipcMain.on("do-login", async (event, { email, pwd }) => {
   try {
     console.log("🔐 Login:", email, "→", BACKEND);
@@ -455,14 +395,8 @@ ipcMain.on("employee-logout", async () => {
   createLoginWindow();
 });
 
-// ── App Lifecycle ──────────────────────────────────────────────────────
+// ── App Lifecycle ──
 app.whenReady().then(async () => {
-  // ✅ FIX 6: PATH — screenshot-desktop + execSync ke liye System32 zarori hai
-  const sys32 = "C:\\Windows\\System32";
-  if (!process.env.PATH?.includes(sys32)) {
-    process.env.PATH = (process.env.PATH || "") + ";" + sys32;
-  }
-
   initPaths();
   checkAdminPrivileges();
 

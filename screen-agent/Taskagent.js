@@ -1,155 +1,108 @@
-// taskAgent.js — WorkTrack Electron Agent
-// ✅ FIX 1: localhost hardcode hata diya — BACKEND_URL env se aata hai
-// ✅ FIX 2: fetch() ki jagah axios — Electron mein reliable
-// ✅ FIX 3: require("electron") → pkg import — ES module crash fix
-// ✅ FIX 4: token support — authorized API calls
-// ✅ FIX 5: 404 fallback — multiple endpoints try karta hai
+// Taskagent.js — WorkTrack Electron Agent Task Tracker
 
-import axios from "axios";
-import pkg   from "electron"; // ✅ FIX 3: require nahi — ES module safe
+import { powerMonitor } from "electron";
 
-// ✅ FIX 1: localhost nahi — Railway URL env se
-const BASE_URL =
-  process.env.BACKEND_URL ||
-  "https://workforce-backend-production-cc13.up.railway.app";
+const BASE_URL = process.env.BACKEND_URL || "https://workforce-backend-production-cc13.up.railway.app";
+const INTERVAL = 30 * 1000;
 
-const INTERVAL = 30_000;
 console.log("[TaskAgent] Backend:", BASE_URL);
 
-// ✅ FIX 5: Sare possible endpoints — jo pehle kaam kare woh use hoga
-const TASK_ENDPOINTS = [
-  "/api/tasks/agent/update",
-  "/api/tasks/agent/ping",
-  "/api/tasks/ping",
-  "/api/agent/update",
-];
+let agentTimer  = null;
+let _employeeId = null;
+let _token      = null;
 
-let agentTimer       = null;
-let _employeeId      = null;
-let _token           = null;
-let _workingEndpoint = null; // cached working endpoint
-
-// ── Active window ──────────────────────────────────────────────────────
+// ── Active window get karo ──
 async function getActiveWindow() {
   try {
-    const m   = await import("active-win");
-    const win = await m.default();
-    return { app: win?.owner?.name || "", title: win?.title || "" };
+    const activeWin = await import("active-win");
+    const win = await activeWin.default();
+    if (!win) return { app: "", title: "" };
+    return {
+      app:   win.owner?.name || "",
+      title: win.title       || "",
+    };
   } catch {
     return { app: "", title: "" };
   }
 }
 
-// ✅ FIX 3: pkg se powerMonitor — require("electron") ES module mein crash karta
+// ── Idle check ──
 function isUserIdle() {
   try {
-    const { powerMonitor } = pkg;
-    return powerMonitor.getSystemIdleTime() > 300; // 5 min
+    const idleSecs = powerMonitor.getSystemIdleTime();
+    return idleSecs > 300;
   } catch {
     return false;
   }
 }
 
-// ✅ FIX 5: Sare endpoints try karo — jo 200/non-404 de woh save karo
-async function findWorkingEndpoint(payload, headers) {
-  for (const ep of TASK_ENDPOINTS) {
-    try {
-      await axios.post(`${BASE_URL}${ep}`, payload, { headers, timeout: 8_000 });
-      console.log(`[TaskAgent] Working endpoint found: ${ep}`);
-      return ep;
-    } catch (err) {
-      const status = err?.response?.status;
-      if (status && status !== 404 && status !== 405) {
-        // Endpoint exist karta hai (auth/server error) — use karo
-        console.log(`[TaskAgent] Endpoint ${ep} exists (status ${status}) — using it`);
-        return ep;
-      }
-      console.log(`[TaskAgent] ${ep} → ${status || err.message}, trying next...`);
-    }
-  }
-  return null; // koi endpoint nahi mila
-}
-
-// ── Main ping ─────────────────────────────────────────────────────────
+// ── Server ping ──
 async function pingServer() {
   if (!_employeeId) return;
 
   const { app, title } = await getActiveWindow();
+  const idle = isUserIdle();
 
   const payload = {
     employeeId:  _employeeId,
     activeApp:   app,
     windowTitle: title,
-    isWorking:   !isUserIdle(),
+    isWorking:   !idle,
   };
 
-  // ✅ FIX 2+4: axios + token header
-  const headers = {
-    "Content-Type": "application/json",
-    ...(_token && { Authorization: `Bearer ${_token}` }),
-  };
+  const endpoints = [
+    "/api/tasks/agent/update",
+    "/api/tasks/agent/ping",
+    "/api/tasks/ping",
+    "/api/agent/update",
+  ];
 
-  try {
-    // ✅ FIX 5: Working endpoint na ho toh dhundho
-    if (!_workingEndpoint) {
-      _workingEndpoint = await findWorkingEndpoint(payload, headers);
-      if (!_workingEndpoint) {
-        console.warn("[TaskAgent] Koi bhi task endpoint nahi mila backend pe — ping skip");
+  for (const endpoint of endpoints) {
+    try {
+      const res = await fetch(`${BASE_URL}${endpoint}`, {
+        method:  "POST",
+        headers: {
+          "Content-Type":  "application/json",
+          "Authorization": `Bearer ${_token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.updated > 0) {
+          console.log(`[TaskAgent] ${data.updated} tasks updated:`, data.changes);
+        }
         return;
       }
-    }
-
-    // ✅ FIX 2: fetch() nahi — axios use karo
-    const res = await axios.post(
-      `${BASE_URL}${_workingEndpoint}`,
-      payload,
-      { headers, timeout: 10_000 }
-    );
-
-    if (res.data?.updated > 0) {
-      console.log(`[TaskAgent] ${res.data.updated} tasks updated`);
-    } else {
-      console.log(`[TaskAgent] Ping OK`);
-    }
-  } catch (err) {
-    const status = err?.response?.status;
-    console.warn(`[TaskAgent] Ping failed:`, status || err.message);
-    // 404 aaya — endpoint reset, agla ping dobara dhundhega
-    if (status === 404 || status === 405) {
-      _workingEndpoint = null;
+      console.log(`[TaskAgent] ${endpoint} → ${res.status}, trying next...`);
+    } catch (err) {
+      console.log(`[TaskAgent] ${endpoint} failed:`, err.message);
     }
   }
+  console.log("[TaskAgent] Koi bhi task endpoint nahi mila backend pe — ping skip");
 }
 
-// ── Public API ────────────────────────────────────────────────────────
-
-// ✅ FIX 4: token parameter add kiya
 export function startTaskAgent(employeeId, token) {
   if (!employeeId) {
     console.warn("[TaskAgent] employeeId nahi diya — agent start nahi hoga");
     return;
   }
-  if (agentTimer) { clearInterval(agentTimer); agentTimer = null; }
-
-  _employeeId      = String(employeeId);
-  _token           = token || null;
-  _workingEndpoint = null; // fresh start
-
-  pingServer(); // turant pehla ping
+  _employeeId = employeeId;
+  _token      = token;
+  console.log(`[TaskAgent] Started: ${employeeId} → ${BASE_URL}`);
+  pingServer();
   agentTimer = setInterval(pingServer, INTERVAL);
-  console.log(`[TaskAgent] Started: ${_employeeId} → ${BASE_URL}`);
 }
 
 export function stopTaskAgent() {
   if (agentTimer) { clearInterval(agentTimer); agentTimer = null; }
-  _employeeId      = null;
-  _token           = null;
-  _workingEndpoint = null;
+  _employeeId = null;
+  _token      = null;
   console.log("[TaskAgent] Stopped");
 }
 
 export function setTaskAgentEmployee(employeeId, token) {
-  _employeeId      = employeeId ? String(employeeId) : null;
-  if (token) _token = token;
-  _workingEndpoint = null;
+  _employeeId = employeeId;
+  _token      = token;
 }

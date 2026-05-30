@@ -32,15 +32,21 @@
     "productName": "WorkTrack Agent",
     "copyright": "WorkTrack",
     "asar": true,
+    "asarUnpack": [
+      "node_modules/screenshot-desktop/**/*",
+      "node_modules/sharp/**/*",
+      "node_modules/uiohook-napi/**/*",
+      "node_modules/active-win/**/*"
+    ],
     "files": [
-  "index.js",
-  "activity.js",
-  "Taskagent.js",
-  "taskWidget.html",
-  ".env",
-  "package.json",
-  "node_modules/**/*"
-],
+      "index.js",
+      "activity.js",
+      "Taskagent.js",
+      "taskWidget.html",
+      ".env",
+      "package.json",
+      "node_modules/**/*"
+    ],
     "directories": {
       "output": "dist"
     },

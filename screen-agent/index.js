@@ -2,7 +2,7 @@
 // ✅ FIXES:
 //   FIX 1: dotenv load kiya — warna BACKEND_URL undefined hota hai
 //   FIX 2: desktopCapturer hata diya — screenshot-desktop use karo (package.json mein yahi hai)
-//   FIX 3: screenshot-desktop → sharp compress → base64 → Railway (koi limit nahi)
+//   FIX 3: PowerShell screenshot — packaged app mein screenshot-desktop fail hota tha
 //   FIX 4: activity.js + taskAgent.js import — duplicate tracking logic nahi
 //   FIX 5: admin privilege check — hosts/firewall gracefully skip if not admin
 //   FIX 6: PATH fix — screenshot-desktop ke liye cmd.exe milna zarori hai
@@ -12,11 +12,11 @@ import pkg from "electron";
 const { app, BrowserWindow, ipcMain } = pkg;
 
 import axios      from "axios";
-import screenshot from "screenshot-desktop";
 import sharp      from "sharp";
 import activeWin  from "active-win";
 import path       from "path";
 import fs         from "fs";
+import os         from "os";
 import { execSync }      from "child_process";
 import { fileURLToPath } from "url";
 
@@ -144,7 +144,34 @@ function unblockEverything() {
   _adminBlockedSites = [];
 }
 
-// ── Screenshot — screenshot-desktop + sharp ────────────────────────────
+// ── ✅ FIX 3: PowerShell Screenshot — packaged app mein kaam karta hai ──
+async function takeScreenshotPowerShell() {
+  const tmpFile = path.join(os.tmpdir(), `wt_ss_${Date.now()}.png`);
+  const escapedPath = tmpFile.replace(/\\/g, "\\\\");
+
+  const ps = [
+    "Add-Type -AssemblyName System.Windows.Forms;",
+    "Add-Type -AssemblyName System.Drawing;",
+    "$screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds;",
+    "$bmp = New-Object System.Drawing.Bitmap($screen.Width, $screen.Height);",
+    "$g = [System.Drawing.Graphics]::FromImage($bmp);",
+    "$g.CopyFromScreen($screen.Location, [System.Drawing.Point]::Empty, $screen.Size);",
+    `$bmp.Save('${escapedPath}');`,
+    "$g.Dispose();",
+    "$bmp.Dispose();",
+  ].join(" ");
+
+  execSync(
+    `powershell -NonInteractive -WindowStyle Hidden -Command "${ps}"`,
+    { timeout: 15000 }
+  );
+
+  const buffer = fs.readFileSync(tmpFile);
+  try { fs.unlinkSync(tmpFile); } catch {}
+  return buffer;
+}
+
+// ── Screenshot — PowerShell + sharp compress ───────────────────────────
 async function takeAndSendScreenshot() {
   if (!employeeData) return;
   try {
@@ -154,13 +181,21 @@ async function takeAndSendScreenshot() {
     const smartApp    = getSmartAppName(rawAppName, windowTitle);
     const { isFlagged, flaggedAppName } = getFlaggedInfo(rawAppName, windowTitle);
 
-    // ✅ FIX 6: PATH fix — screenshot-desktop cmd.exe dhundhta hai
+    // ✅ FIX 6: PATH fix — System32 zarori hai
     const sys32 = "C:\\Windows\\System32";
     if (!process.env.PATH?.includes(sys32)) {
       process.env.PATH = (process.env.PATH || "") + ";" + sys32;
     }
 
-    const rawBuffer = await screenshot({ format: "png" });
+    // ✅ FIX 3: PowerShell se screenshot lo — packaged app mein reliable hai
+    let rawBuffer;
+    try {
+      rawBuffer = await takeScreenshotPowerShell();
+      console.log("📸 PowerShell screenshot success");
+    } catch (psErr) {
+      console.error("❌ PowerShell screenshot failed:", psErr.message);
+      return; // skip this cycle
+    }
 
     const compressed = await sharp(rawBuffer)
       .resize({ width: 1280, withoutEnlargement: true })

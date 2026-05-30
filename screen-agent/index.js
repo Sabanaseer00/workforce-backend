@@ -5,12 +5,14 @@
 //   FIX 3: screenshot-desktop → sharp compress → base64 → Railway (koi limit nahi)
 //   FIX 4: activity.js + taskAgent.js import — duplicate tracking logic nahi
 //   FIX 5: admin privilege check — hosts/firewall gracefully skip if not admin
+//   FIX 6: PATH fix — screenshot-desktop ke liye cmd.exe milna zarori hai
+//   FIX 7: taskAgent 404 — endpoint /api/tasks/agent/ping pe fallback
 
 import pkg from "electron";
 const { app, BrowserWindow, ipcMain } = pkg;
 
 import axios      from "axios";
-import screenshot from "screenshot-desktop";   // ✅ FIX 2: desktopCapturer nahi
+import screenshot from "screenshot-desktop";
 import sharp      from "sharp";
 import activeWin  from "active-win";
 import path       from "path";
@@ -26,7 +28,7 @@ config({ path: path.join(__dirname, ".env") });
 
 // ✅ FIX 4: activity + taskAgent import
 import { startTracking, stopTracking } from "./activity.js";
-import { startTaskAgent, stopTaskAgent } from "./taskAgent.js";
+import { startTaskAgent, stopTaskAgent } from "./Taskagent.js";
 
 // ── Config ─────────────────────────────────────────────────────────────
 const BACKEND  = process.env.BACKEND_URL  || "https://workforce-backend-production-cc13.up.railway.app";
@@ -143,8 +145,6 @@ function unblockEverything() {
 }
 
 // ── Screenshot — screenshot-desktop + sharp ────────────────────────────
-// ✅ FIX 2+3: screenshot-desktop → Buffer → sharp compress → base64
-// Railway pe koi body limit nahi (Vercel wali 4.5MB problem nahi)
 async function takeAndSendScreenshot() {
   if (!employeeData) return;
   try {
@@ -154,10 +154,14 @@ async function takeAndSendScreenshot() {
     const smartApp    = getSmartAppName(rawAppName, windowTitle);
     const { isFlagged, flaggedAppName } = getFlaggedInfo(rawAppName, windowTitle);
 
-    // ✅ FIX 2: screenshot-desktop — returns Buffer directly
+    // ✅ FIX 6: PATH fix — screenshot-desktop cmd.exe dhundhta hai
+    const sys32 = "C:\\Windows\\System32";
+    if (!process.env.PATH?.includes(sys32)) {
+      process.env.PATH = (process.env.PATH || "") + ";" + sys32;
+    }
+
     const rawBuffer = await screenshot({ format: "png" });
 
-    // ✅ FIX 3: sharp se compress — ~100-250KB banega
     const compressed = await sharp(rawBuffer)
       .resize({ width: 1280, withoutEnlargement: true })
       .jpeg({ quality: 50 })
@@ -192,13 +196,12 @@ async function takeAndSendScreenshot() {
           "Content-Type": "application/json",
         },
         timeout:       20_000,
-        maxBodyLength: 10 * 1024 * 1024, // 10MB — Railway safe
+        maxBodyLength: 10 * 1024 * 1024,
       }
     );
     console.log(`✅ ${employeeData.name} | ${smartApp}${isFlagged ? " 🚨 FLAGGED" : ""}`);
   } catch (e) {
     console.error("❌ Screenshot error:", e.message);
-    // Screenshot fail hone pe heartbeat band nahi hota — sirf log
   }
 }
 
@@ -230,8 +233,8 @@ let captureInterval = null;
 
 function startCapture() {
   if (captureInterval) clearInterval(captureInterval);
-  takeAndSendScreenshot(); // turant pehla screenshot
-  captureInterval = setInterval(takeAndSendScreenshot, 30_000); // har 30s
+  takeAndSendScreenshot();
+  captureInterval = setInterval(takeAndSendScreenshot, 30_000);
 }
 
 function stopCapture() {
@@ -359,10 +362,10 @@ function createMainWindow() {
 
 // ── Session ────────────────────────────────────────────────────────────
 async function startSession() {
-  startCapture();                                        // screenshots
-  await startTracking(employeeData);                     // heartbeat + input
-  startTaskAgent(employeeData.id, employeeData.token);  // task ping
-  await blockEverything();                               // site blocking (admin only)
+  startCapture();
+  await startTracking(employeeData);
+  startTaskAgent(employeeData.id, employeeData.token);
+  await blockEverything();
   console.log(`✅ Session: ${employeeData.name}`);
 }
 
@@ -419,8 +422,14 @@ ipcMain.on("employee-logout", async () => {
 
 // ── App Lifecycle ──────────────────────────────────────────────────────
 app.whenReady().then(async () => {
+  // ✅ FIX 6: PATH — screenshot-desktop + execSync ke liye System32 zarori hai
+  const sys32 = "C:\\Windows\\System32";
+  if (!process.env.PATH?.includes(sys32)) {
+    process.env.PATH = (process.env.PATH || "") + ";" + sys32;
+  }
+
   initPaths();
-  checkAdminPrivileges(); // ✅ FIX 5
+  checkAdminPrivileges();
 
   const saved = loadSavedToken();
   if (saved?.token && saved?.id) {

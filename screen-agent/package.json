@@ -1,15 +1,18 @@
 {
-  "name": "screen-agent",
+  "name": "worktrack-agent",
   "version": "1.0.0",
   "description": "WorkTrack Employee Monitoring Agent",
-  "main": "main.js",
+  "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "electron .",
-    "dev": "electron ."
+    "dev": "electron .",
+    "build": "electron-builder --win --x64",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux"
   },
   "keywords": [],
-  "author": "",
+  "author": "WorkTrack",
   "license": "ISC",
   "dependencies": {
     "active-win": "^8.2.1",
@@ -17,9 +20,47 @@
     "dotenv": "^16.4.5",
     "screenshot-desktop": "^1.0.0",
     "sharp": "^0.34.5",
-    "socket.io-client": "^4.8.3"
+    "socket.io-client": "^4.8.3",
+    "uiohook-napi": "^1.5.5"
   },
   "devDependencies": {
-    "electron": "^33.0.0"
+    "electron": "^42.3.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.worktrack.agent",
+    "productName": "WorkTrack Agent",
+    "copyright": "WorkTrack",
+    "asar": true,
+    "files": [
+  "index.js",
+  "activity.js",
+  "Taskagent.js",
+  "taskWidget.html",
+  ".env",
+  "package.json",
+  "node_modules/**/*"
+],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WorkTrack Agent"
+    },
+    "mac": {
+      "target": "dmg"
+    },
+    "linux": {
+      "target": "AppImage"
+    }
   }
 }

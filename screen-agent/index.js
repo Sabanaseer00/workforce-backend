@@ -1,10 +1,9 @@
 import pkg from "electron";
-const { app, BrowserWindow, ipcMain } = pkg;
+const { app, BrowserWindow, ipcMain, desktopCapturer } = pkg;
 
 import axios from "axios";
 import activeWin from "active-win";
 import sharp from "sharp";
-import screenshot from "screenshot-desktop";
 import path from "path";
 import fs from "fs";
 import http from "http";
@@ -14,44 +13,12 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
-// ═══════════════════════════════════════════════════════════════════════
-//  🌐 BACKEND URL — Railway production
-// ═══════════════════════════════════════════════════════════════════════
-const BACKEND = "https://workforce-backend-production-cc13.up.railway.app";
-
-// Axios instance — production ke liye proper timeouts aur headers
-const api = axios.create({
-  baseURL: BACKEND,
-  timeout: 15000,
-  headers: {
-    "Content-Type": "application/json",
-    "Origin": "app://.",           // Electron origin
-    "User-Agent": "WorkTrack-Agent/1.0",
-  },
-});
-
-// Token interceptor — har request mein auto Bearer token lagao
-api.interceptors.request.use((config) => {
-  if (employeeData?.token) {
-    config.headers["Authorization"] = `Bearer ${employeeData.token}`;
-  }
-  return config;
-});
-
-// Response error interceptor — 401 pe auto logout
-api.interceptors.response.use(
-  (res) => res,
-  (err) => {
-    if (err?.response?.status === 401 && employeeData) {
-      console.log("🔒 Token expire — auto logout");
-      handleLogout();
-    }
-    return Promise.reject(err);
-  }
-);
+const BACKEND = "http://localhost:5000";
 
 // ═══════════════════════════════════════════════════════════════════════
 //  🚫 DISTRACTION APPS LIST — sirf detect karne ke liye (flagging)
+//  Yeh list BLOCK karne ke liye nahi, sirf screenshot/heartbeat mein
+//  "flagged" mark karne ke liye hai.
 // ═══════════════════════════════════════════════════════════════════════
 const FLAGGED_APPS = [
   { name: "YouTube",   keywords: ["youtube"] },
@@ -66,22 +33,29 @@ const FLAGGED_APPS = [
 
 // ═══════════════════════════════════════════════════════════════════════
 //  🔥 DYNAMIC APP BLOCKER
+//  Admin Chrome extension se jo sites block kare, wohi yahan aayengi.
+//  Hardcoded list nahi — backend se fetch hogi.
 // ═══════════════════════════════════════════════════════════════════════
+
 const HOSTS_FILE         = "C:\\Windows\\System32\\drivers\\etc\\hosts";
 const BLOCK_MARKER_START = "# WORKTRACK_BLOCK_START";
 const BLOCK_MARKER_END   = "# WORKTRACK_BLOCK_END";
 
+// Runtime mein admin-blocked sites store hoti hain
 let _adminBlockedSites = [];
 
+// ── Backend se admin-blocked sites fetch karo ──
 async function fetchAdminBlockedSites() {
   if (!employeeData?.token) return [];
   try {
-    const res = await api.get("/api/blocked-sites", { timeout: 8000 });
+    const res = await axios.get(`${BACKEND}/api/blocked-sites`, {
+      headers: { Authorization: `Bearer ${employeeData.token}` },
+      timeout: 5000,
+    });
+    // Backend array of { domain: "youtube.com" } ya sirf strings return kare
     const sites = res.data?.sites || res.data || [];
-    const domains = sites
-      .map(s => (typeof s === "string" ? s : s.domain))
-      .filter(Boolean);
-    console.log(`🔒 Blocked sites (${domains.length}):`, domains.join(", ") || "none");
+    const domains = sites.map(s => (typeof s === "string" ? s : s.domain)).filter(Boolean);
+    console.log(`🔒 Admin blocked sites fetched (${domains.length}):`, domains.join(", ") || "none");
     return domains;
   } catch (e) {
     console.log("⚠️ Could not fetch blocked sites:", e.message);
@@ -89,9 +63,12 @@ async function fetchAdminBlockedSites() {
   }
 }
 
+// ── Hosts file update karo (sirf admin-blocked sites ke liye) ──
 function applyHostsBlock(sites) {
   try {
     let content = fs.readFileSync(HOSTS_FILE, "utf8");
+
+    // Pehle purani WorkTrack entries hata do
     const startIdx = content.indexOf(BLOCK_MARKER_START);
     const endIdx   = content.indexOf(BLOCK_MARKER_END);
     if (startIdx !== -1 && endIdx !== -1) {
@@ -101,6 +78,7 @@ function applyHostsBlock(sites) {
     }
     content = content.trim();
 
+    // Agar koi site block karni hai tabhi entries likho
     if (sites.length > 0) {
       const blockLines = [];
       sites.forEach(domain => {
@@ -115,18 +93,29 @@ function applyHostsBlock(sites) {
 
     fs.writeFileSync(HOSTS_FILE, content, "utf8");
     execSync("ipconfig /flushdns", { stdio: "ignore" });
-    console.log(sites.length > 0 ? `🚫 Hosts: ${sites.length} blocked` : "✅ Hosts: Unblocked");
+
+    if (sites.length > 0) {
+      console.log(`🚫 Hosts: ${sites.length} site(s) blocked`);
+    } else {
+      console.log("✅ Hosts: All sites unblocked");
+    }
   } catch (err) {
     console.error("❌ Hosts update failed:", err.message);
   }
 }
 
+// ── Firewall rules update karo (sirf admin-blocked sites ke liye) ──
 function applyFirewallBlock(sites) {
   try {
+    // Pehle sab purane WorkTrack firewall rules hatao
     try {
-      execSync(`netsh advfirewall firewall delete rule name="WORKTRACK_*"`, { stdio: "ignore" });
+      execSync(
+        `netsh advfirewall firewall delete rule name="WORKTRACK_*"`,
+        { stdio: "ignore" }
+      );
     } catch {}
 
+    // Naye rules sirf admin-blocked sites ke liye banao
     sites.forEach(domain => {
       const clean    = domain.replace(/^www\./, "");
       const ruleName = `WORKTRACK_${clean.replace(/\./g, "_")}`;
@@ -138,26 +127,40 @@ function applyFirewallBlock(sites) {
       } catch {}
     });
 
-    console.log(sites.length > 0 ? `🔥 Firewall: ${sites.length} blocked` : "✅ Firewall: Cleared");
+    if (sites.length > 0) {
+      console.log(`🔥 Firewall: ${sites.length} site(s) blocked`);
+    } else {
+      console.log("✅ Firewall: All WorkTrack rules removed");
+    }
   } catch (err) {
     console.error("❌ Firewall update failed:", err.message);
   }
 }
 
+// ── MAIN: Admin sites fetch karke block karo ──
 async function blockEverything() {
-  console.log("🚫 Admin blocked sites fetch ho rahi hain...");
+  console.log("🚫 Work mode ON — admin blocked sites fetch ho rahi hain...");
   _adminBlockedSites = await fetchAdminBlockedSites();
   applyHostsBlock(_adminBlockedSites);
   applyFirewallBlock(_adminBlockedSites);
+  if (_adminBlockedSites.length === 0) {
+    console.log("ℹ️ Abhi admin ne koi site block nahi ki.");
+  } else {
+    console.log("🚫 Admin blocked sites apply ho gayi!");
+  }
 }
 
+// ── MAIN: Sab unblock karo ──
 function unblockEverything() {
-  console.log("✅ Sab unblock ho raha hai...");
-  applyHostsBlock([]);
-  applyFirewallBlock([]);
+  console.log("✅ Work mode OFF — sab unblock ho raha hai...");
+  applyHostsBlock([]);      // Hosts entries hata do
+  applyFirewallBlock([]);   // Firewall rules hata do
   _adminBlockedSites = [];
+  console.log("✅ Everything unblocked!");
 }
 
+// ── Admin ne naya site block/unblock kiya toh real-time update ──
+// (Socket event ya polling se call karo)
 async function refreshAdminBlockedSites() {
   if (!employeeData?.token) return;
   const newSites = await fetchAdminBlockedSites();
@@ -166,7 +169,7 @@ async function refreshAdminBlockedSites() {
     newSites.some(s => !_adminBlockedSites.includes(s));
 
   if (changed) {
-    console.log("🔄 Blocked sites update — re-applying...");
+    console.log("🔄 Admin blocked sites update ho gayi — re-applying...");
     _adminBlockedSites = newSites;
     applyHostsBlock(_adminBlockedSites);
     applyFirewallBlock(_adminBlockedSites);
@@ -186,7 +189,7 @@ let _idleCount  = 0;
 let _fetchCtr   = 0;
 
 const IDLE_THRESHOLD = 4;
-const TT_CHECK_INTERVAL = 15_000;
+const CHECK_INTERVAL = 15_000;
 
 const SYSTEM_IDLE_WINDOWS = [
   "lock screen", "sign in", "windows security",
@@ -200,73 +203,27 @@ function isSystemIdle(title) {
   return SYSTEM_IDLE_WINDOWS.some(p => tl.includes(p));
 }
 
-// Task API — Railway backend ke liye https use karo
-function ttApi(endpoint, method = "GET", body = null) {
+function ttApi(path, method = "GET", body = null) {
   return new Promise((resolve, reject) => {
-    const data    = body ? JSON.stringify(body) : null;
-    const url     = new URL(BACKEND + "/api" + endpoint);
-    const options = {
-      hostname: url.hostname,
-      port:     443,
-      path:     url.pathname + url.search,
-      method,
+    const data = body ? JSON.stringify(body) : null;
+    const req  = http.request({
+      hostname: "localhost", port: 5000,
+      path: "/api" + path, method,
       headers: {
         "Content-Type": "application/json",
-        "User-Agent":   "WorkTrack-Agent/1.0",
         ...(_ttToken && { Authorization: `Bearer ${_ttToken}` }),
         ...(data && { "Content-Length": Buffer.byteLength(data) }),
       },
-    };
-
-    const https = await import("https").then(m => m.default || m);
-    const req = https.request(options, (res) => {
+    }, (res) => {
       let raw = "";
-      res.on("data", c => (raw += c));
+      res.on("data", c => raw += c);
       res.on("end", () => {
         if (res.statusCode === 204) return resolve(null);
-        if (res.statusCode >= 400)
-          return reject(new Error(`HTTP ${res.statusCode}: ${raw.slice(0, 200)}`));
+        if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode}: ${raw.slice(0,200)}`));
         try { resolve(JSON.parse(raw)); } catch { resolve(raw); }
       });
     });
     req.on("error", reject);
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error("Timeout")); });
-    if (data) req.write(data);
-    req.end();
-  });
-}
-
-// ttApi async wrapper fix — https import inside sync function nahi ho sakta
-async function ttApiCall(endpoint, method = "GET", body = null) {
-  const https = (await import("https")).default;
-  return new Promise((resolve, reject) => {
-    const data    = body ? JSON.stringify(body) : null;
-    const url     = new URL(BACKEND + "/api" + endpoint);
-    const options = {
-      hostname: url.hostname,
-      port:     443,
-      path:     url.pathname + url.search,
-      method,
-      headers: {
-        "Content-Type": "application/json",
-        "User-Agent":   "WorkTrack-Agent/1.0",
-        ...(_ttToken && { Authorization: `Bearer ${_ttToken}` }),
-        ...(data && { "Content-Length": Buffer.byteLength(data) }),
-      },
-    };
-
-    const req = https.request(options, (res) => {
-      let raw = "";
-      res.on("data", c => (raw += c));
-      res.on("end", () => {
-        if (res.statusCode === 204) return resolve(null);
-        if (res.statusCode >= 400)
-          return reject(new Error(`HTTP ${res.statusCode}: ${raw.slice(0, 200)}`));
-        try { resolve(JSON.parse(raw)); } catch { resolve(raw); }
-      });
-    });
-    req.on("error", reject);
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error("Timeout")); });
     if (data) req.write(data);
     req.end();
   });
@@ -276,10 +233,10 @@ async function ttFetch() {
   if (!_ttToken) return;
   try {
     let tasks = null;
-    try { tasks = await ttApiCall("/tasks/mine"); } catch {}
+    try { tasks = await ttApi("/tasks/mine"); } catch {}
     if (!Array.isArray(tasks)) {
       try {
-        const all = await ttApiCall("/tasks");
+        const all = await ttApi("/tasks");
         if (Array.isArray(all)) {
           tasks = all.filter(t =>
             String(t.assigned_to?._id ?? t.assigned_to ?? "") === String(_ttEmpId)
@@ -289,17 +246,17 @@ async function ttFetch() {
     }
     if (Array.isArray(tasks)) {
       _ttTasks = tasks;
-      console.log(`[TT] ${tasks.length} tasks:`, tasks.map(t => `${t.title}(${t.status})`).join(", "));
+      console.log(`[TT] ${tasks.length} tasks:`, tasks.map(t=>`${t.title}(${t.status})`).join(", "));
     }
   } catch (e) { console.log("[TT] fetch error:", e.message); }
 }
 
 async function ttPatch(taskId, newStatus) {
   try {
-    await ttApiCall(`/tasks/${taskId}/status`, "PATCH", { status: newStatus });
+    await ttApi(`/tasks/${taskId}/status`, "PATCH", { status: newStatus });
     console.log(`[TT] ✅ Task ${taskId} → ${newStatus}`);
     _ttTasks = _ttTasks.map(t =>
-      String(t._id || t.id) === String(taskId) ? { ...t, status: newStatus } : t
+      String(t._id||t.id) === String(taskId) ? {...t, status: newStatus} : t
     );
     if (_ttSocket?.connected) {
       _ttSocket.emit("task:statusUpdate", { taskId, status: newStatus, employeeId: _ttEmpId });
@@ -308,9 +265,9 @@ async function ttPatch(taskId, newStatus) {
   } catch (e) {
     console.log(`[TT] ❌ PATCH failed: ${e.message}`);
     try {
-      const task = _ttTasks.find(t => String(t._id || t.id) === String(taskId));
+      const task = _ttTasks.find(t => String(t._id||t.id) === String(taskId));
       if (task) {
-        await ttApiCall(`/tasks/${taskId}`, "PUT", {
+        await ttApi(`/tasks/${taskId}`, "PUT", {
           assigned_to:  String(task.assigned_to?._id ?? task.assigned_to ?? ""),
           title:        task.title,
           description:  task.description || "",
@@ -319,12 +276,12 @@ async function ttPatch(taskId, newStatus) {
           due_date:     task.due_date || null,
         });
         _ttTasks = _ttTasks.map(t =>
-          String(t._id || t.id) === String(taskId) ? { ...t, status: newStatus } : t
+          String(t._id||t.id) === String(taskId) ? {...t, status: newStatus} : t
         );
         if (_ttSocket?.connected) {
           _ttSocket.emit("task:statusUpdate", { taskId, status: newStatus, employeeId: _ttEmpId });
         }
-        console.log(`[TT] ✅ PUT fallback OK`);
+        console.log(`[TT] ✅ PUT fallback: ${newStatus}`);
         return true;
       }
     } catch (e2) { console.log(`[TT] ❌ PUT also failed: ${e2.message}`); }
@@ -341,14 +298,15 @@ async function ttCheck() {
       _fetchCtr = 0;
     }
 
-    const win   = await activeWin().catch(() => null);
+    const win   = await activeWin();
     const title = win?.title || win?.owner?.name || "";
-    console.log(`[TT] Active: "${title.slice(0, 60)}"`);
+    console.log(`[TT] Active window: "${title.slice(0, 70)}"`);
 
     let isIdle = isSystemIdle(title);
     try {
-      const idleSecs = pkg.powerMonitor.getSystemIdleTime();
-      if (idleSecs > 120) { isIdle = true; console.log(`[TT] Idle: ${idleSecs}s`); }
+      const { powerMonitor } = pkg;
+      const idleSecs = powerMonitor.getSystemIdleTime();
+      if (idleSecs > 120) { isIdle = true; console.log(`[TT] System idle: ${idleSecs}s`); }
     } catch {}
 
     const pending    = _ttTasks.filter(t => t.status === "pending");
@@ -358,12 +316,10 @@ async function ttCheck() {
       if (_ttActiveId) {
         _idleCount++;
         if (_idleCount >= IDLE_THRESHOLD) {
-          const active = _ttTasks.find(t => String(t._id || t.id) === _ttActiveId);
+          const active = _ttTasks.find(t => String(t._id||t.id) === _ttActiveId);
           if (active?.status === "in_progress") {
             await ttPatch(_ttActiveId, "pending");
-            _ttActiveId = null;
-            _idleCount  = 0;
-            _fetchCtr   = 3;
+            _ttActiveId = null; _idleCount = 0; _fetchCtr = 3;
           }
         }
       }
@@ -385,126 +341,93 @@ async function ttCheck() {
   } catch (e) { console.log("[TT] check error:", e.message); }
 }
 
-async function ttSocketConnect() {
+async function ttSocket() {
   try {
     let ioFn;
     try {
       const m = await import("socket.io-client");
       ioFn = m.io || m.default;
     } catch {
-      console.log("[TT] socket.io-client not available");
+      console.log("[TT] socket.io-client not installed");
       return;
     }
-
-    // Railway backend WebSocket — wss:// use hoga
     _ttSocket = ioFn(BACKEND, {
-      transports:    ["websocket", "polling"],
-      auth:          { token: _ttToken },
-      reconnection:  true,
-      reconnectionDelay: 3000,
-      timeout:       10000,
+      transports: ["websocket", "polling"],
+      auth: { token: _ttToken },
+      reconnection: true,
     });
-
     _ttSocket.on("connect", () => {
-      console.log("[TT] Socket connected to Railway");
+      console.log("[TT] Socket connected");
       _ttSocket.emit("join", `emp_${_ttEmpId}`);
       _ttSocket.emit("join", "admins");
     });
-
-    _ttSocket.on("task:new",    ()  => ttFetch());
-    _ttSocket.on("task:update", (p) => {
+    _ttSocket.on("task:new",    ()  => { ttFetch(); });
+    _ttSocket.on("task:update", p   => {
       _ttTasks = _ttTasks.map(t =>
-        String(t._id || t.id) === String(p._id || p.taskId) ? { ...t, ...p } : t
+        String(t._id||t.id) === String(p._id||p.taskId) ? {...t, ...p} : t
       );
     });
+
+    // ── Admin ne blocked sites update ki toh real-time refresh ──
     _ttSocket.on("blockedSites:update", () => {
-      console.log("🔔 Admin ne blocked sites update ki...");
+      console.log("🔔 Admin ne blocked sites update ki — refresh ho rahi hain...");
       refreshAdminBlockedSites();
     });
 
     _ttSocket.on("disconnect",    () => console.log("[TT] Socket disconnected"));
-    _ttSocket.on("connect_error", (e) => console.log("[TT] Socket error:", e.message));
-  } catch (e) { console.log("[TT] socket setup error:", e.message); }
+    _ttSocket.on("connect_error", e  => console.log("[TT] Socket error:", e.message));
+  } catch (e) { console.log("[TT] socket error:", e.message); }
 }
 
 async function ttStart(token, empId) {
   _ttToken = token;
   _ttEmpId = empId;
-  console.log(`[TT] Starting for: ${empId}`);
+  console.log(`[TT] Starting for employee: ${empId}`);
   await ttFetch();
-  await ttSocketConnect();
+  await ttSocket();
   ttCheck();
-  _ttTimer = setInterval(ttCheck, TT_CHECK_INTERVAL);
+  _ttTimer = setInterval(ttCheck, CHECK_INTERVAL);
 }
 
 function ttStop() {
   if (_ttTimer)  clearInterval(_ttTimer);
   if (_ttSocket) _ttSocket.disconnect();
-  _ttTimer    = null;
-  _ttSocket   = null;
-  _ttActiveId = null;
-  _idleCount  = 0;
+  _ttTimer = null; _ttSocket = null; _ttActiveId = null; _idleCount = 0;
   console.log("[TT] Stopped");
 }
-
 // ═══════════════════════════════════════════════════════════════════════
-//  ACTIVITY TRACKING
-// ═══════════════════════════════════════════════════════════════════════
-let _mouseEvents     = 0;
-let _keyEvents       = 0;
-let _sessionStart    = null;
-let _appUsageMap     = {};
-let _lastApp         = "";
-let _currentAppStart = null;
 
-function updateAppUsage(newApp) {
-  const now = new Date();
-  if (_lastApp && _currentAppStart) {
-    const seconds = Math.round((now - _currentAppStart) / 1000);
-    if (seconds > 0) _appUsageMap[_lastApp] = (_appUsageMap[_lastApp] || 0) + seconds;
-  }
-  _lastApp         = newApp;
-  _currentAppStart = now;
+let mainWin        = null;
+let loginWin       = null;
+let captureInterval = null;
+let employeeData   = null;
+let TOKEN_FILE     = null;
+
+function initPaths() {
+  TOKEN_FILE = path.join(app.getPath("userData"), "emp_token.json");
+  console.log("📁 Token Path:", TOKEN_FILE);
+}
+function loadSavedToken() {
+  try { if (TOKEN_FILE && fs.existsSync(TOKEN_FILE)) return JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8")); } catch {}
+  return null;
+}
+function saveToken(data) { try { if (TOKEN_FILE) fs.writeFileSync(TOKEN_FILE, JSON.stringify(data), "utf8"); } catch {} }
+function clearToken()    { try { if (TOKEN_FILE && fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE); } catch {} }
+
+async function validateToken(token) {
+  try {
+    const res = await axios.get(`${BACKEND}/api/auth/me`, {
+      headers: { Authorization: `Bearer ${token}` }, timeout: 5000,
+    });
+    return res.data;
+  } catch { return null; }
 }
 
-function formatTime(seconds) {
-  const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
-  return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-
-function getActiveTime() {
-  if (!_sessionStart) return "0h 0m";
-  return formatTime(Math.round((new Date() - _sessionStart) / 1000));
-}
-
-function getActiveMinsToday() {
-  if (!_sessionStart) return 0;
-  return Math.round((new Date() - _sessionStart) / 1000 / 60);
-}
-
-function getTopApps() {
-  const entries = Object.entries(_appUsageMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
-  const total   = entries.reduce((s, [, v]) => s + v, 1);
-  return entries.map(([name, seconds]) => ({
-    name,
-    pct:  Math.round((seconds / total) * 100),
-    time: formatTime(seconds),
-  }));
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  APP / WINDOW HELPERS
-// ═══════════════════════════════════════════════════════════════════════
 function getSmartAppName(appName, windowTitle) {
-  const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
-  for (const b of FLAGGED_APPS) {
-    if (b.keywords.some(k => combined.includes(k))) return b.name;
-  }
+  const combined = (appName + " " + windowTitle).toLowerCase();
+  for (const b of FLAGGED_APPS) if (b.keywords.some(k => combined.includes(k))) return b.name;
   if (windowTitle) {
-    const isBrowser = ["chrome", "edge", "firefox", "brave", "opera"].some(b =>
-      (appName || "").toLowerCase().includes(b)
-    );
+    const isBrowser = ["chrome","edge","firefox","brave","opera"].some(b => appName.toLowerCase().includes(b));
     if (isBrowser) {
       const p = windowTitle.split(" - ");
       return p.length >= 2 ? p[0].trim() : windowTitle.split(" | ")[0].trim();
@@ -514,211 +437,18 @@ function getSmartAppName(appName, windowTitle) {
 }
 
 function getFlaggedInfo(appName, windowTitle) {
-  const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
-  for (const b of FLAGGED_APPS) {
-    if (b.keywords.some(k => combined.includes(k)))
-      return { isFlagged: true, flaggedAppName: b.name };
-  }
+  const combined = (appName + " " + windowTitle).toLowerCase();
+  for (const b of FLAGGED_APPS) if (b.keywords.some(k => combined.includes(k)))
+    return { isFlagged: true, flaggedAppName: b.name };
   return { isFlagged: false, flaggedAppName: null };
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  SCREENSHOT — screenshot-desktop (Electron 35+ compatible)
-// ═══════════════════════════════════════════════════════════════════════
-async function takeScreenshot() {
-  try {
-    const imgBuffer  = await screenshot({ format: "png" });
-    const jpegBuffer = await sharp(imgBuffer).jpeg({ quality: 60 }).toBuffer();
-    return jpegBuffer;
-  } catch (err) {
-    console.error("❌ Screenshot failed:", err.message);
-    throw err;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  HEARTBEAT — Railway backend
-// ═══════════════════════════════════════════════════════════════════════
-async function sendHeartbeat(activeApp, windowTitle) {
-  if (!employeeData?.id || !employeeData?.token) return;
-
-  const curMouse = _mouseEvents;
-  const curKey   = _keyEvents;
-  _mouseEvents   = 0;
-  _keyEvents     = 0;
-
-  const activityPct = Math.min(100, Math.round(((curMouse + curKey) / 20) * 100));
-
-  // Status compute
-  let status = "Idle";
-  try {
-    const idleSecs = pkg.powerMonitor.getSystemIdleTime?.() ?? 0;
-    if (idleSecs < 120) status = activeApp ? "Working" : "Active";
-  } catch {
-    status = activeApp ? "Working" : "Active";
-  }
-
-  try {
-    await api.post("/api/employees/heartbeat", {
-      employeeId:      employeeData.id,
-      activeApp,
-      windowTitle,
-      mouseEvents:     curMouse,
-      keyEvents:       curKey,
-      activityPct,
-      activeTime:      getActiveTime(),
-      activeMinsToday: getActiveMinsToday(),
-      topApps:         getTopApps(),
-      status,
-      isRemote:        false,
-      vpnConnected:    false,
-    });
-    console.log(`💓 Heartbeat | ${activeApp} | ${status} | ${activityPct}% | ${getActiveTime()}`);
-  } catch (e) {
-    console.log("❌ Heartbeat error:", e?.response?.data?.message || e.message);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  MAIN CAPTURE LOOP
-// ═══════════════════════════════════════════════════════════════════════
-let mainWin         = null;
-let loginWin        = null;
-let captureInterval = null;
-let employeeData    = null;
-let TOKEN_FILE      = null;
-
-async function captureScreen() {
-  if (!employeeData) return;
-  try {
-    const aw          = await activeWin().catch(() => null);
-    const rawAppName  = aw?.owner?.name || "";
-    const windowTitle = aw?.title       || "";
-    const smartApp    = getSmartAppName(rawAppName, windowTitle);
-    const { isFlagged, flaggedAppName } = getFlaggedInfo(rawAppName, windowTitle);
-
-    // App usage track
-    if (smartApp !== _lastApp) {
-      updateAppUsage(smartApp);
-      _mouseEvents += 2; // window change = activity signal
-    }
-
-    // Heartbeat
-    await sendHeartbeat(smartApp, windowTitle);
-
-    // Screenshot
-    let base64 = null;
-    try {
-      const buf = await takeScreenshot();
-      base64    = "data:image/jpeg;base64," + buf.toString("base64");
-    } catch (screenshotErr) {
-      console.log("⚠️ Screenshot skip:", screenshotErr.message);
-    }
-
-    if (base64) {
-      await api.post("/api/screenshots/live", {
-        employeeId:   employeeData.id,
-        empId:        employeeData.empId,
-        employeeName: employeeData.name,
-        department:   employeeData.department,
-        role:         employeeData.role,
-        app:          smartApp,
-        windowTitle,
-        rawApp:       rawAppName,
-        imageUrl:     base64,
-        isBlocked:    isFlagged,
-        blockedApp:   flaggedAppName,
-        time:         new Date().toLocaleTimeString(),
-        date:         new Date().toLocaleDateString(),
-        productivity: isFlagged
-          ? Math.floor(Math.random() * 15) + 5
-          : Math.floor(Math.random() * 30) + 65,
-      }, { timeout: 20000 }); // screenshot bada hota hai — zyada timeout
-
-      console.log(`📸 ${employeeData.name} | ${smartApp} ${isFlagged ? "🚨 FLAGGED" : "✅"}`);
-    }
-  } catch (e) {
-    console.log("❌ Capture error:", e?.response?.data?.message || e.message);
-  }
-}
-
-function startCapture() {
-  if (captureInterval) clearInterval(captureInterval);
-  _sessionStart    = new Date();
-  _appUsageMap     = {};
-  _mouseEvents     = 0;
-  _keyEvents       = 0;
-  _lastApp         = "";
-  _currentAppStart = new Date();
-
-  console.log("🎬 Capture loop starting — Railway backend");
-  captureScreen();
-  captureInterval = setInterval(captureScreen, 10000);
-}
-
-function stopCapture() {
-  if (captureInterval) clearInterval(captureInterval);
-  captureInterval = null;
-  _sessionStart   = null;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  OFFLINE SIGNAL
-// ═══════════════════════════════════════════════════════════════════════
-async function goOffline() {
-  if (!employeeData?.id || !employeeData?.token) return;
-  try {
-    await api.post("/api/employees/go-offline", { employeeId: employeeData.id }, { timeout: 5000 });
-    console.log("🔴 Offline signal sent");
-  } catch (e) {
-    console.log("⚠️ Go-offline error:", e.message);
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  TOKEN HELPERS
-// ═══════════════════════════════════════════════════════════════════════
-function initPaths() {
-  TOKEN_FILE = path.join(app.getPath("userData"), "emp_token.json");
-  console.log("📁 Token Path:", TOKEN_FILE);
-}
-function loadSavedToken() {
-  try {
-    if (TOKEN_FILE && fs.existsSync(TOKEN_FILE))
-      return JSON.parse(fs.readFileSync(TOKEN_FILE, "utf8"));
-  } catch {}
-  return null;
-}
-function saveToken(data) {
-  try { if (TOKEN_FILE) fs.writeFileSync(TOKEN_FILE, JSON.stringify(data), "utf8"); } catch {}
-}
-function clearToken() {
-  try { if (TOKEN_FILE && fs.existsSync(TOKEN_FILE)) fs.unlinkSync(TOKEN_FILE); } catch {}
-}
-
-async function validateToken(token) {
-  try {
-    const res = await axios.get(`${BACKEND}/api/auth/me`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "User-Agent":  "WorkTrack-Agent/1.0",
-      },
-      timeout: 8000,
-    });
-    return res.data;
-  } catch { return null; }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  LOGIN WINDOW
-// ═══════════════════════════════════════════════════════════════════════
 function createLoginWindow() {
   loginWin = new BrowserWindow({
     width: 420, height: 520, resizable: false, center: true, frame: true,
     title: "Employee Login",
     webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
-
   const loginHTML = `<!DOCTYPE html>
 <html><head><style>
 * { box-sizing:border-box; margin:0; padding:0; }
@@ -732,7 +462,6 @@ input:focus { border-color:rgba(125,195,245,0.5); }
 button { width:100%; padding:11px; border-radius:9px; border:1px solid rgba(125,195,245,0.3); background:rgba(125,195,245,0.15); color:#7dc3f5; font-size:13px; font-weight:700; cursor:pointer; font-family:inherit; margin-top:4px; }
 button:hover { background:rgba(125,195,245,0.25); }
 .error { font-size:12px; color:#fca5a5; text-align:center; margin-top:12px; min-height:20px; }
-.server { font-size:10px; color:#2a3a4a; text-align:center; margin-top:8px; }
 </style></head>
 <body><div class="box">
 <h2>Employee Login</h2><p>Apni company email se login karein</p>
@@ -740,12 +469,11 @@ button:hover { background:rgba(125,195,245,0.25); }
 <label>Password</label><input type="password" id="pwd" placeholder="••••••••"/>
 <button id="btn" onclick="doLogin()">Login & Start Monitoring</button>
 <div class="error" id="err"></div>
-<div class="server">workforce-backend-production-cc13.up.railway.app</div>
 </div>
 <script>
 const { ipcRenderer } = require('electron');
 document.addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
-ipcRenderer.on('login-error', (_, msg) => {
+ipcRenderer.on('login-error', (_,msg) => {
   document.getElementById('err').textContent = msg;
   document.getElementById('btn').textContent = 'Login & Start Monitoring';
   document.getElementById('btn').disabled = false;
@@ -753,23 +481,16 @@ ipcRenderer.on('login-error', (_, msg) => {
 function doLogin() {
   const email = document.getElementById('email').value.trim();
   const pwd   = document.getElementById('pwd').value;
-  if (!email || !pwd) {
-    document.getElementById('err').textContent = 'Email aur password zarori hain';
-    return;
-  }
-  document.getElementById('btn').textContent = 'Connecting to server...';
+  if(!email||!pwd){ document.getElementById('err').textContent='Email aur password zarori hain'; return; }
+  document.getElementById('btn').textContent = 'Logging in...';
   document.getElementById('btn').disabled = true;
   ipcRenderer.send('do-login', { email, pwd });
 }
 </script></body></html>`;
-
   const tmpPath = path.join(app.getPath("temp"), "login.html");
   fs.writeFileSync(tmpPath, loginHTML);
   loginWin.loadFile(tmpPath);
-  loginWin.on("closed", () => {
-    loginWin = null;
-    if (!employeeData) app.quit();
-  });
+  loginWin.on("closed", () => { loginWin = null; if (!employeeData) app.quit(); });
 }
 
 function createMainWindow() {
@@ -777,83 +498,130 @@ function createMainWindow() {
     width: 1200, height: 800,
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
-  // Frontend — Vercel URL ya localhost
-  const FRONTEND = "https://workforce-frontend-ten.vercel.app";
-  mainWin.loadURL(FRONTEND);
-  mainWin.on("closed", () => { mainWin = null; });
+  mainWin.loadURL("http://localhost:5173");
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  LOGOUT HELPER (reusable — token expire pe bhi)
-// ═══════════════════════════════════════════════════════════════════════
-async function handleLogout() {
-  console.log("🔄 Logout...");
+async function sendHeartbeat(activeApp, windowTitle, mouseEvents, keyEvents) {
+  if (!employeeData?.id || !employeeData?.token) return;
+  try {
+    await axios.post(`${BACKEND}/api/employees/heartbeat`,
+      { employeeId: employeeData.id, activeApp, windowTitle, mouseEvents, keyEvents, isRemote: false, vpnConnected: false },
+      { headers: { Authorization: `Bearer ${employeeData.token}` }, timeout: 5000 }
+    );
+    console.log("💓 Heartbeat:", activeApp || "idle");
+  } catch(e) { console.log("❌ Heartbeat error:", e.message); }
+}
+
+async function takeScreenshot() {
+  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1280, height: 720 } });
+  if (!sources || sources.length === 0) throw new Error("No screen source");
+  return await sharp(sources[0].thumbnail.toPNG()).jpeg({ quality: 60 }).toBuffer();
+}
+
+async function captureScreen() {
+  if (!employeeData) return;
+  try {
+    const aw          = await activeWin();
+    const rawAppName  = aw?.owner?.name || "";
+    const windowTitle = aw?.title || "";
+    const smartApp    = getSmartAppName(rawAppName, windowTitle);
+    const { isFlagged, flaggedAppName } = getFlaggedInfo(rawAppName, windowTitle);
+    await sendHeartbeat(smartApp, windowTitle, 5, 3);
+
+    const base64 = "data:image/jpeg;base64," + (await takeScreenshot()).toString("base64");
+
+    await axios.post(`${BACKEND}/api/screenshots/live`, {
+      employeeId:   employeeData.id,
+      empId:        employeeData.empId,
+      employeeName: employeeData.name,
+      department:   employeeData.department,
+      role:         employeeData.role,
+      app:          smartApp,
+      windowTitle,
+      rawApp:       rawAppName,
+      imageUrl:     base64,
+      isBlocked:    isFlagged,
+      blockedApp:   flaggedAppName,
+      time:         new Date().toLocaleTimeString(),
+      date:         new Date().toLocaleDateString(),
+      productivity: isFlagged ? Math.floor(Math.random()*15)+5 : Math.floor(Math.random()*30)+65,
+    }, { headers: { Authorization: `Bearer ${employeeData.token}` }, timeout: 10000 });
+
+    console.log(`📸 ${employeeData.name} | ${smartApp} ${isFlagged ? "🚨 FLAGGED" : "✅"}`);
+  } catch(e) { console.log("❌ Capture error:", e.message); }
+}
+
+function startCapture() {
+  if (captureInterval) clearInterval(captureInterval);
+  captureScreen();
+  captureInterval = setInterval(captureScreen, 10000);
+}
+function stopCapture() { if (captureInterval) clearInterval(captureInterval); captureInterval = null; }
+
+async function goOffline() {
+  if (!employeeData?.id || !employeeData?.token) return;
+  try {
+    await axios.post(`${BACKEND}/api/employees/go-offline`,
+      { employeeId: employeeData.id },
+      { headers: { Authorization: `Bearer ${employeeData.token}` }, timeout: 3000 }
+    );
+    console.log("🔴 Employee offline");
+  } catch {}
+}
+
+// ══════════════════════════════════════════════════════
+//  🔴 LOGOUT — sab band karo, apps unblock karo
+// ══════════════════════════════════════════════════════
+ipcMain.on("employee-logout", async () => {
+  console.log("🔄 Logout ho raha hai...");
   stopCapture();
   ttStop();
   await goOffline();
+
+  // ✅ LOGOUT PE: Sab unblock karo
   unblockEverything();
+
   clearToken();
   employeeData = null;
   if (mainWin) { mainWin.close(); mainWin = null; }
   createLoginWindow();
-}
+});
 
-// ═══════════════════════════════════════════════════════════════════════
-//  IPC HANDLERS
-// ═══════════════════════════════════════════════════════════════════════
-ipcMain.on("employee-logout", async () => { await handleLogout(); });
-
+// ══════════════════════════════════════════════════════
+//  🟢 LOGIN — monitoring shuru, admin sites block karo
+// ══════════════════════════════════════════════════════
 ipcMain.on("do-login", async (event, { email, pwd }) => {
   try {
-    const res = await axios.post(
-      `${BACKEND}/api/auth/login`,
-      { email, password: pwd, role: "employee" },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent":   "WorkTrack-Agent/1.0",
-        },
-        timeout: 15000,
-      }
-    );
-
-    const user = res.data.user || res.data;
+    const res = await axios.post(`${BACKEND}/api/auth/login`, { email, password: pwd, role: "employee" });
     employeeData = {
       token:      res.data.token,
-      id:         user?.id || user?._id,
-      empId:      user?.empId || user?.id || user?._id,
-      name:       user?.name || `${user?.firstName || ""} ${user?.lastName || ""}`.trim(),
-      department: user?.department,
-      role:       user?.role,
-      email:      user?.email,
+      id:         res.data.user?.id,
+      empId:      res.data.user?.empId || res.data.user?.id,
+      name:       res.data.user?.name || `${res.data.user?.firstName||""} ${res.data.user?.lastName||""}`.trim(),
+      department: res.data.user?.department,
+      role:       res.data.user?.role,
+      email:      res.data.user?.email,
     };
-
     saveToken(employeeData);
-    console.log(`✅ Login OK: ${employeeData.name} (${employeeData.id})`);
-
     if (loginWin) { loginWin.removeAllListeners("closed"); loginWin.close(); loginWin = null; }
-
     createMainWindow();
     startCapture();
     ttStart(employeeData.token, employeeData.id);
+
+    // ✅ LOGIN PE: Admin ki blocked sites fetch karke apply karo
     await blockEverything();
 
-  } catch (e) {
-    const msg = e?.response?.data?.message || e?.response?.data?.error || e.message || "Login failed";
-    console.log("❌ Login error:", msg);
-    event.sender.send("login-error", msg);
+    console.log(`✅ Logged in: ${employeeData.name}`);
+  } catch(e) {
+    event.sender.send("login-error", e?.response?.data?.message || "Login failed");
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════
-//  APP LIFECYCLE
-// ═══════════════════════════════════════════════════════════════════════
 app.whenReady().then(async () => {
   initPaths();
-
   const saved = loadSavedToken();
   if (saved?.token && saved?.id) {
-    console.log("🔍 Saved token validate ho raha hai — Railway backend...");
+    console.log("🔍 Saved token check ho raha hai...");
     const valid = await validateToken(saved.token);
     if (valid) {
       employeeData = saved;
@@ -861,26 +629,30 @@ app.whenReady().then(async () => {
       createMainWindow();
       startCapture();
       ttStart(employeeData.token, employeeData.id);
+
+      // ✅ AUTO LOGIN PE BHI: Admin ki blocked sites apply karo
       await blockEverything();
+
     } else {
-      console.log("⚠️ Token expire — login page");
-      clearToken();
-      createLoginWindow();
+      console.log("⚠️ Token expire ho gaya — login page");
+      clearToken(); createLoginWindow();
     }
-  } else {
-    createLoginWindow();
-  }
+  } else { createLoginWindow(); }
 });
 
+// ══════════════════════════════════════════════════════
+//  App band hone pe bhi unblock karo
+// ══════════════════════════════════════════════════════
 app.on("before-quit", async (e) => {
   e.preventDefault();
   stopCapture();
   ttStop();
   await goOffline();
+
+  // ✅ APP BAND HONE PE: Unblock karo
   unblockEverything();
+
   app.exit(0);
 });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
+app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

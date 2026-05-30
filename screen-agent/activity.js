@@ -1,32 +1,43 @@
-// activity.js — Heartbeat + Input Tracking
-// Railway backend — koi body size limit nahi
+// activity.js — Electron Agent ke liye Complete Activity Tracker
 
 import activeWin from "active-win";
-import axios     from "axios";
+import axios from "axios";
 
-const BACKEND =
-  process.env.BACKEND_URL ||
-  "https://workforce-backend-production-cc13.up.railway.app";
-
+const BACKEND = process.env.BACKEND_URL || "https://workforce-backend-production-cc13.up.railway.app";
 console.log("[Activity] Backend:", BACKEND);
 
-const MEETING_APPS = [
-  "zoom","teams","google meet","skype","webex","discord","microsoft teams",
-];
-const BLOCKED_APPS = [
-  { name: "YouTube",   keywords: ["youtube"]          },
-  { name: "Facebook",  keywords: ["facebook"]         },
-  { name: "TikTok",    keywords: ["tiktok"]           },
-  { name: "Instagram", keywords: ["instagram"]        },
-  { name: "Twitter",   keywords: ["twitter","x.com"]  },
-  { name: "Netflix",   keywords: ["netflix"]          },
-  { name: "WhatsApp",  keywords: ["whatsapp"]         },
-  { name: "Snapchat",  keywords: ["snapchat"]         },
+// ── Productive apps list ──
+const PRODUCTIVE_APPS = [
+  "VS Code", "Code", "Figma", "Photoshop", "Illustrator",
+  "Postman", "Terminal", "iTerm", "GitHub Desktop",
+  "Jira", "Excel", "Microsoft Excel", "Word", "Microsoft Word",
+  "PowerPoint", "Microsoft PowerPoint", "Notion", "Slack",
+  "IntelliJ IDEA", "PyCharm", "WebStorm", "Android Studio",
+  "Xcode", "MySQL Workbench", "DataGrip", "Sublime Text",
+  "Atom", "Notepad++", "Chrome", "Firefox", "Safari",
+  "Microsoft Edge", "Outlook", "Microsoft Outlook",
 ];
 
-// ── State ──────────────────────────────────────────────────────────────
+const MEETING_APPS = [
+  "zoom", "teams", "google meet", "skype", "webex", "discord",
+  "Microsoft Teams",
+];
+
+const BLOCKED_APPS = [
+  { name: "YouTube",   keywords: ["youtube"] },
+  { name: "Facebook",  keywords: ["facebook"] },
+  { name: "TikTok",    keywords: ["tiktok"] },
+  { name: "Instagram", keywords: ["instagram"] },
+  { name: "Twitter",   keywords: ["twitter", "x.com"] },
+  { name: "Netflix",   keywords: ["netflix"] },
+  { name: "WhatsApp",  keywords: ["whatsapp"] },
+  { name: "Snapchat",  keywords: ["snapchat"] },
+];
+
+// ── State ──
 let employeeData    = null;
 let heartbeatTimer  = null;
+let activityTimer   = null;
 let mouseEvents     = 0;
 let keyEvents       = 0;
 let appUsageMap     = {};
@@ -36,14 +47,14 @@ let lastWinTitle    = null;
 let _uiohook        = null;
 let _uiohookActive  = false;
 let _pollTimer      = null;
-let _sessionStart   = null;
+let sessionStart    = null;
 
-// ── Input tracking ─────────────────────────────────────────────────────
+// ── Input tracking ──
 async function setupInputTracking() {
   try {
     const mod = await import("uiohook-napi");
     const uIOhook = mod.uIOhook || mod.default?.uIOhook;
-    if (!uIOhook) throw new Error("export nahi mila");
+    if (!uIOhook) throw new Error("uIOhook export nahi mila");
     _uiohook = uIOhook;
     uIOhook.on("mousemove",  () => { mouseEvents++; });
     uIOhook.on("mouseclick", () => { mouseEvents++; });
@@ -52,7 +63,7 @@ async function setupInputTracking() {
     _uiohookActive = true;
     console.log("✅ [Activity] uiohook active");
   } catch (e) {
-    console.log("⚠️  [Activity] uiohook unavailable, window-poll fallback:", e.message);
+    console.log("⚠️ [Activity] uiohook nahi mila, window-poll fallback:", e.message);
     startWindowPollFallback();
   }
 }
@@ -72,73 +83,71 @@ function startWindowPollFallback() {
       }
     } catch {}
   }, 2000);
-  console.log("🔄 [Activity] Window-poll fallback started");
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────
+// ── Smart app name ──
 function getSmartAppName(appName, windowTitle) {
   const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
-  for (const b of BLOCKED_APPS)
-    if (b.keywords.some(k => combined.includes(k))) return b.name;
-  const isBrowser = ["chrome","edge","firefox","brave","opera"].some(b =>
-    (appName || "").toLowerCase().includes(b)
-  );
-  if (isBrowser && windowTitle) {
-    const p = windowTitle.split(" - ");
-    return p.length >= 2 ? p[0].trim() : windowTitle.split(" | ")[0].trim();
+  for (const blocked of BLOCKED_APPS) {
+    if (blocked.keywords.some(k => combined.includes(k))) return blocked.name;
   }
   return appName || "Unknown App";
 }
 
-function computeStatus(appName, windowTitle, mc, kc) {
+// ── Status compute ──
+function computeStatus(appName, windowTitle, mouseCount, keyCount) {
   const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
-  for (const m of MEETING_APPS)
-    if (combined.includes(m)) return "Meeting";
-  const total = mc + kc;
-  if (total > 15) return "Working";
-  if (total > 0)  return "Active";
+  for (const m of MEETING_APPS) {
+    if (combined.includes(m.toLowerCase())) return "Meeting";
+  }
+  const totalEvents = mouseCount + keyCount;
+  if (totalEvents > 15) return "Working";
+  if (totalEvents > 0)  return "Active";
   return "Idle";
 }
 
-function computeActivityPct(mc, kc) {
+// ── Activity percent ──
+function computeActivityPct(mouseCount, keyCount) {
   const threshold = _uiohookActive ? 20 : 8;
-  return Math.min(100, Math.round(((mc + kc) / threshold) * 100));
+  return Math.min(100, Math.round(((mouseCount + keyCount) / threshold) * 100));
 }
 
+// ── App usage update ──
 function updateAppUsage(newApp) {
   const now = Date.now();
   if (lastApp && currentAppStart) {
-    const secs = Math.round((now - currentAppStart) / 1000);
-    if (secs > 0) appUsageMap[lastApp] = (appUsageMap[lastApp] || 0) + secs;
+    const seconds = Math.round((now - currentAppStart) / 1000);
+    if (seconds > 0) appUsageMap[lastApp] = (appUsageMap[lastApp] || 0) + seconds;
   }
   lastApp         = newApp;
   currentAppStart = now;
 }
 
-function formatTime(s) {
-  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+function formatTime(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
 function getActiveTime() {
-  if (!_sessionStart) return "0h 0m";
-  return formatTime(Math.round((Date.now() - _sessionStart) / 1000));
+  if (!sessionStart) return "0h 0m";
+  return formatTime(Math.round((Date.now() - sessionStart) / 1000));
 }
 
 function getActiveMinsToday() {
-  if (!_sessionStart) return 0;
-  return Math.round((Date.now() - _sessionStart) / 60000);
+  if (!sessionStart) return 0;
+  return Math.round((Date.now() - sessionStart) / 60000);
 }
 
 function getTopApps() {
-  const entries = Object.entries(appUsageMap).sort((a,b) => b[1]-a[1]).slice(0,6);
-  const total   = Math.max(entries.reduce((s,[,v]) => s+v, 0), 1);
+  const entries = Object.entries(appUsageMap).sort((a, b) => b[1] - a[1]).slice(0, 6);
+  const total   = Math.max(entries.reduce((s, [, v]) => s + v, 0), 1);
   return entries.map(([name, secs]) => ({
-    name, pct: Math.round((secs/total)*100), time: formatTime(secs),
+    name, pct: Math.round((secs / total) * 100), time: formatTime(secs),
   }));
 }
 
-// ── Heartbeat ──────────────────────────────────────────────────────────
+// ── Heartbeat ──
 async function sendHeartbeat() {
   if (!employeeData?.token || !employeeData?.id) return;
   try {
@@ -152,6 +161,9 @@ async function sendHeartbeat() {
     const curMouse = mouseEvents; mouseEvents = 0;
     const curKey   = keyEvents;   keyEvents   = 0;
 
+    const status      = computeStatus(rawApp, winTitle, curMouse, curKey);
+    const activityPct = computeActivityPct(curMouse, curKey);
+
     await axios.post(
       `${BACKEND}/api/employees/heartbeat`,
       {
@@ -160,11 +172,11 @@ async function sendHeartbeat() {
         windowTitle:     winTitle,
         mouseEvents:     curMouse,
         keyEvents:       curKey,
-        activityPct:     computeActivityPct(curMouse, curKey),
+        activityPct,
         activeTime:      getActiveTime(),
         activeMinsToday: getActiveMinsToday(),
         topApps:         getTopApps(),
-        status:          computeStatus(rawApp, winTitle, curMouse, curKey),
+        status,
         isRemote:        false,
         vpnConnected:    false,
       },
@@ -173,16 +185,18 @@ async function sendHeartbeat() {
         timeout: 10_000,
       }
     );
-    console.log(`💓 [Activity] ${smartApp} | ${computeStatus(rawApp, winTitle, curMouse, curKey)} | ${computeActivityPct(curMouse, curKey)}%`);
+    console.log(`💓 [Activity] ${smartApp} | ${status} | ${activityPct}%`);
   } catch (err) {
-    console.error(`❌ [Activity] Heartbeat:`, err?.response?.status, err?.response?.data?.message || err.message);
+    console.error("❌ [Activity] Heartbeat:", err?.response?.status, err?.response?.data?.message || err.message);
+    if (err?.response?.status === 401)
+      console.error("⚠️  Token expired — employee dobara login kare");
   }
 }
 
-// ── Public API ─────────────────────────────────────────────────────────
+// ── Public API ──
 export async function startTracking(empData) {
   employeeData    = empData;
-  _sessionStart   = Date.now();
+  sessionStart    = Date.now();
   appUsageMap     = {};
   mouseEvents     = 0;
   keyEvents       = 0;
@@ -190,7 +204,7 @@ export async function startTracking(empData) {
   lastWinTitle    = null;
   currentAppStart = Date.now();
 
-  console.log(`🟢 [Activity] Started: ${empData.name}`);
+  console.log(`🟢 [Activity] Started: ${empData.name} → ${BACKEND}`);
   await setupInputTracking();
   await sendHeartbeat();
   heartbeatTimer = setInterval(sendHeartbeat, 10_000);
@@ -219,7 +233,7 @@ export async function stopTracking() {
   }
 
   employeeData   = null;
-  _sessionStart  = null;
+  sessionStart   = null;
   _uiohookActive = false;
   lastWinTitle   = null;
   appUsageMap    = {};

@@ -11,13 +11,12 @@
     "build:dir": "electron-builder --win --x64 --dir"
   },
   "dependencies": {
-    "active-win": "^8.2.1",
+    "active-win": "^7.2.1",
     "axios": "^1.15.2",
     "dotenv": "^16.4.5",
     "screenshot-desktop": "^1.0.0",
     "sharp": "^0.34.5",
-    "socket.io-client": "^4.8.3",
-    "uiohook-napi": "^1.5.2"
+    "socket.io-client": "^4.8.3"
   },
   "devDependencies": {
     "electron": "^41.3.0",

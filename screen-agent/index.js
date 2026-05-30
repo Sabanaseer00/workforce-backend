@@ -10,7 +10,6 @@ const { app, BrowserWindow, ipcMain } = pkg;
 import axios        from "axios";
 import screenshot   from "screenshot-desktop";
 import sharp        from "sharp";
-import activeWin    from "active-win";
 import path         from "path";
 import fs           from "fs";
 import { execSync } from "child_process";
@@ -28,6 +27,20 @@ const BACKEND  = process.env.BACKEND_URL  || "https://workforce-backend-producti
 const FRONTEND = process.env.FRONTEND_URL || "https://workforce-frontend-ten.vercel.app";
 console.log("🌐 Backend :", BACKEND);
 console.log("🖥  Frontend:", FRONTEND);
+
+// PowerShell based active window detection — no ffi-napi needed
+const activeWin = async () => {
+  try {
+    const result = execSync(
+      `powershell -NoProfile -Command "$pid2 = 0; $sig = '[DllImport(\\\"user32.dll\\\")]public static extern IntPtr GetForegroundWindow();[DllImport(\\\"user32.dll\\\")]public static extern uint GetWindowThreadProcessId(IntPtr h,out uint p);'; $t = Add-Type -PassThru -Name U32 -Namespace W -MemberDefinition $sig; $hwnd = $t::GetForegroundWindow(); $t::GetWindowThreadProcessId($hwnd,[ref]$pid2)|Out-Null; $proc = Get-Process -Id $pid2 -ErrorAction SilentlyContinue; $name = if($proc.MainModule.FileVersionInfo.ProductName){$proc.MainModule.FileVersionInfo.ProductName}else{$proc.ProcessName}; $title = $proc.MainWindowTitle; Write-Output ($name + '|||' + $title)"`,
+      { timeout: 4000, windowsHide: true }
+    ).toString().trim();
+    const parts = result.split("|||");
+    return { owner: { name: parts[0]?.trim() || "Unknown" }, title: parts[1]?.trim() || "" };
+  } catch {
+    return null;
+  }
+};
 
 const FLAGGED_APPS = [
   { name: "YouTube",   keywords: ["youtube"] },

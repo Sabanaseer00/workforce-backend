@@ -1,45 +1,40 @@
-// ─────────────────────────────────────────────────────────────
-// taskAgent.js  —  Electron main process mein require karo
-//
-// Ye module har 30 seconds mein server ko batata hai:
-//   - Employee kaun sa app use kar raha hai
-//   - Kya woh kaam kar raha hai ya idle hai
-//
-// Setup (main.js mein):
-//   import { startTaskAgent } from "./taskAgent.js";
-//   startTaskAgent(employeeId);   // login ke baad call karo
-//   stopTaskAgent();              // logout pe
-// ─────────────────────────────────────────────────────────────
+// taskAgent.js — Electron main process mein import karo
+// ✅ FIXES:
+//   FIX 1: localhost hardcode hata diya — BACKEND_URL env se aata hai
+//   FIX 2: fetch() ki jagah axios — Electron mein reliable
+//   FIX 3: require("electron") ES module crash fix — pkg se lo
+//   FIX 4: token bhi bhejo — authorized API calls ke liye
 
-const BASE_URL = "http://localhost:5000"; // apna server URL
-const INTERVAL = 30 * 1000; // 30 seconds
+import axios from "axios";
+import pkg   from "electron";
 
-let agentTimer   = null;
-let _employeeId  = null;
+// ✅ FIX 1: localhost nahi — Railway URL
+const BASE_URL =
+  process.env.BACKEND_URL ||
+  "https://workforce-backend-production-cc13.up.railway.app";
 
-// ── Active window title get karna (cross-platform) ──
+const INTERVAL = 30_000;
+console.log("[TaskAgent] Backend:", BASE_URL);
+
+let agentTimer  = null;
+let _employeeId = null;
+let _token      = null;
+
 async function getActiveWindow() {
   try {
-    // active-win npm package use karo:  npm install active-win
-    const activeWin = await import("active-win");
-    const win = await activeWin.default();
-    if (!win) return { app: "", title: "" };
-    return {
-      app:   win.owner?.name  || "",
-      title: win.title        || "",
-    };
+    const m   = await import("active-win");
+    const win = await m.default();
+    return { app: win?.owner?.name || "", title: win?.title || "" };
   } catch {
-    // active-win nahi hai — fallback
     return { app: "", title: "" };
   }
 }
 
-// ── Idle check (5 min idle = not working) ──
+// ✅ FIX 3: pkg se powerMonitor — require("electron") ES module mein crash karta hai
 function isUserIdle() {
   try {
-    const { powerMonitor } = require("electron");
-    const idleSecs = powerMonitor.getSystemIdleTime();
-    return idleSecs > 300; // 5 minutes
+    const { powerMonitor } = pkg;
+    return powerMonitor.getSystemIdleTime() > 300;
   } catch {
     return false;
   }
@@ -47,63 +42,53 @@ function isUserIdle() {
 
 async function pingServer() {
   if (!_employeeId) return;
-
   const { app, title } = await getActiveWindow();
-  const idle           = isUserIdle();
-
-  const payload = {
-    employeeId:  _employeeId,
-    activeApp:   app,
-    windowTitle: title,
-    isWorking:   !idle,
-  };
-
   try {
-    const res = await fetch(`${BASE_URL}/api/tasks/agent/update`, {
-      method:  "POST",
-      headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      console.warn(`[TaskAgent] Server error: ${res.status}`);
-      return;
-    }
-
-    const data = await res.json();
-    if (data.updated > 0) {
-      console.log(`[TaskAgent] ${data.updated} tasks updated:`, data.changes);
+    // ✅ FIX 2: axios use karo fetch() ki jagah
+    const res = await axios.post(
+      `${BASE_URL}/api/tasks/agent/update`,
+      {
+        employeeId:  _employeeId,
+        activeApp:   app,
+        windowTitle: title,
+        isWorking:   !isUserIdle(),
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          // ✅ FIX 4: token bhejo
+          ...(_token && { Authorization: `Bearer ${_token}` }),
+        },
+        timeout: 10_000,
+      }
+    );
+    if (res.data?.updated > 0) {
+      console.log(`[TaskAgent] ${res.data.updated} tasks updated`);
     }
   } catch (err) {
-    // Server offline — silently ignore
-    console.warn("[TaskAgent] Ping failed (server offline?):", err.message);
+    console.warn(`[TaskAgent] Ping failed:`, err?.response?.status || err.message);
   }
 }
 
-export function startTaskAgent(employeeId) {
-  if (!employeeId) {
-    console.warn("[TaskAgent] employeeId nahi diya — agent start nahi hoga");
-    return;
-  }
-  _employeeId = employeeId;
-
-  // Foran ek ping karo
+// ✅ FIX 4: token parameter add kiya
+export function startTaskAgent(employeeId, token) {
+  if (!employeeId) { console.warn("[TaskAgent] No employeeId"); return; }
+  if (agentTimer)  { clearInterval(agentTimer); agentTimer = null; }
+  _employeeId = String(employeeId);
+  _token      = token || null;
   pingServer();
-
-  // Phir har 30s pe
   agentTimer = setInterval(pingServer, INTERVAL);
-  console.log(`[TaskAgent] Started for employee: ${employeeId}`);
+  console.log(`[TaskAgent] Started: ${_employeeId} → ${BASE_URL}`);
 }
 
 export function stopTaskAgent() {
-  if (agentTimer) {
-    clearInterval(agentTimer);
-    agentTimer = null;
-  }
+  if (agentTimer) { clearInterval(agentTimer); agentTimer = null; }
   _employeeId = null;
+  _token      = null;
   console.log("[TaskAgent] Stopped");
 }
 
-export function setTaskAgentEmployee(employeeId) {
-  _employeeId = employeeId;
+export function setTaskAgentEmployee(employeeId, token) {
+  _employeeId = employeeId ? String(employeeId) : null;
+  if (token) _token = token;
 }

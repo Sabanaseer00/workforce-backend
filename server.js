@@ -6,26 +6,26 @@ import cookieParser from "cookie-parser";
 import dns from "dns";
 import { connectDB } from "./config/db.js";
 import { initSocket } from "./config/socket.js";
-import burnoutRoutes        from "./routes/burnout.routes.js";
-import authRoutes           from "./routes/auth.routes.js";
-import taskRoutes           from "./routes/task.routes.js";
-import employeeRoutes       from "./routes/employee.routes.js";
-import activityRoutes       from "./routes/activity.routes.js";
-import screenshotRoutes     from "./routes/screenshot.routes.js";
-import reportRoutes         from "./routes/report.routes.js";
-import settingsRoutes       from "./routes/settings.routes.js";
-import dashboardRoutes      from "./routes/dashboard.routes.js";
-import alertRoutes          from "./routes/alert.routes.js";
-import privacyRoutes        from "./routes/privacy.routes.js";
-import blockingRoutes       from "./routes/blocking.routes.js";
-import empActivityRoutes    from "./routes/Empactivity.routes.js";
-import empScreenshotRoutes  from "./routes/Empscreenshot.routes.js";
-import empWorkHoursRoutes   from "./routes/Empworkhours.routes.js";
-import empProfileRoutes     from "./routes/Empprofile.routes.js";
-import empTaskRoutes        from "./routes/Emptask.routes.js";
-import empDashboardRoutes   from "./routes/Empdashboard.routes.js";
-import blockedAppRoutes     from "./routes/blockedApp.routes.js";
-import emailVerifyRoutes    from "./routes/emailVerify.routes.js";
+import burnoutRoutes   from "./routes/burnout.routes.js";
+import authRoutes       from "./routes/auth.routes.js";
+import taskRoutes       from "./routes/task.routes.js";
+import employeeRoutes   from "./routes/employee.routes.js";
+import activityRoutes   from "./routes/activity.routes.js";
+import screenshotRoutes from "./routes/screenshot.routes.js";
+import reportRoutes     from "./routes/report.routes.js";
+import settingsRoutes   from "./routes/settings.routes.js";
+import dashboardRoutes  from "./routes/dashboard.routes.js";
+import alertRoutes      from "./routes/alert.routes.js";
+import privacyRoutes    from "./routes/privacy.routes.js";
+import blockingRoutes   from "./routes/blocking.routes.js";
+import empActivityRoutes   from "./routes/Empactivity.routes.js";
+import empScreenshotRoutes from "./routes/Empscreenshot.routes.js";
+import empWorkHoursRoutes  from "./routes/Empworkhours.routes.js";
+import empProfileRoutes    from "./routes/Empprofile.routes.js";
+import empTaskRoutes       from "./routes/Emptask.routes.js";
+import empDashboardRoutes  from "./routes/Empdashboard.routes.js";
+import blockedAppRoutes    from "./routes/blockedApp.routes.js";
+import emailVerifyRoutes   from "./routes/emailVerify.routes.js";
 
 dotenv.config();
 
@@ -34,27 +34,25 @@ const server = http.createServer(app);
 
 dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
-// ─── Ek hi jagah — dono server.js aur socket.js yahan se sync hain ──────────
-const ALLOWED_ORIGINS = [
-  "https://workforce-frontend-ten.vercel.app",
-  "https://workforce-productivity-5163.vercel.app",
-  "https://workforce-frontend-git-main-beenish-latifs-projects.vercel.app",
-  "http://localhost:5173",
-  "http://localhost:3000",
-  "http://localhost:5000",
-];
-
 app.use(cors({
   origin: function (origin, callback) {
+    const allowed = [
+      "https://workforce-frontend-ten.vercel.app",
+      "https://workforce-productivity-5163.vercel.app",
+      "https://workforce-frontend-git-main-beenish-latifs-projects.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:3000",
+      "http://localhost:5000",
+    ];
     if (
       !origin ||
-      ALLOWED_ORIGINS.includes(origin) ||
+      allowed.includes(origin) ||
       origin.startsWith("http://127.0.0.1") ||
       origin.startsWith("chrome-extension://")
     ) {
       callback(null, true);
     } else {
-      callback(new Error("Not allowed by CORS: " + origin));
+      callback(new Error("Not allowed by CORS"));
     }
   },
   credentials: true,
@@ -75,7 +73,6 @@ const startServer = async () => {
     const ioInstance = initSocket(server);
     app.set("io", ioInstance);
 
-    // ─── Routes ────────────────────────────────────────────────────────────
     app.use("/api/auth",         authRoutes);
     app.use("/api/tasks",        taskRoutes);
     app.use("/api/screenshots",  screenshotRoutes);
@@ -98,7 +95,6 @@ const startServer = async () => {
     app.use("/api/emp", empDashboardRoutes);
     app.use("/api/verify-email", emailVerifyRoutes);
 
-    // ─── Start ─────────────────────────────────────────────────────────────
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);

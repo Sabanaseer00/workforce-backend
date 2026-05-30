@@ -1,4 +1,5 @@
 import { Server } from "socket.io";
+import jwt from "jsonwebtoken";
 
 let io;
 
@@ -43,26 +44,7 @@ export const initSocket = (httpServer) => {
     // App.jsx se "join_room" emit hota hai (role = "admin" | "employee")
     socket.on("join_room", (role) => {
       socket.join(role);
-      console.log(`🔐 Socket joined role room: ${role}`);
-    });
-
-    // Employee apne room mein join hota hai (JWT se empId nikalta hai)
-    socket.on("join_employee", () => {
-      const token = socket.handshake.auth?.token;
-      if (token) {
-        try {
-          const payload = JSON.parse(
-            Buffer.from(token.split(".")[1], "base64").toString()
-          );
-          const empId = payload.id || payload._id || payload.userId;
-          if (empId) {
-            socket.join(`emp_${empId}`);
-            console.log(`👤 Employee ${empId} joined room`);
-          }
-        } catch {
-          console.warn("⚠️ join_employee: invalid token");
-        }
-      }
+      console.log(`📍 ${socket.id} joined room: ${role}`);
     });
 
     // Electron agent → admin ko task update forward karo
@@ -108,11 +90,14 @@ export const initSocket = (httpServer) => {
     });
 
     socket.on("disconnect", () => {
-      console.log("❌ Socket disconnected:", socket.id);
+      console.log("🔌 Socket disconnected:", socket.id);
     });
   });
 
   return io;
 };
 
-export const getIO = () => io;
+export const getIO = () => {
+  if (!io) throw new Error("Socket.io not initialized!");
+  return io;
+};

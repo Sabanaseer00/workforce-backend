@@ -12,9 +12,9 @@ import Task       from "../models/Task.js";
 // ════════════════════════════════════════════════════════
 export const getMyDashboard = async (req, res) => {
   try {
-    const empId      = req.user._id;
-    const empIdStr   = empId.toString();
-    const now        = new Date();
+    const empId     = req.user._id;
+    const empIdStr  = empId.toString();
+    const now       = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
     // ── Sab kuch parallel fetch karo ──
@@ -46,11 +46,8 @@ export const getMyDashboard = async (req, res) => {
     if (!emp) return res.status(404).json({ message: "Employee not found" });
 
     // ── Activity stats ──
-    // FIX: duration = heartbeat units, 6 units = 1 minute (1 heartbeat ≈ 10 seconds)
-    const totalDurationUnits = todayActivity.reduce((s, a) => s + (a.duration || 1), 0);
-    const totalMins = Math.round(totalDurationUnits / 6);
-
-    const avgPct = todayActivity.length
+    const totalMins = todayActivity.reduce((s, a) => s + (a.duration || 1), 0);
+    const avgPct    = todayActivity.length
       ? Math.round(todayActivity.reduce((s, a) => s + (a.pct || 0), 0) / todayActivity.length)
       : 0;
 
@@ -67,14 +64,14 @@ export const getMyDashboard = async (req, res) => {
 
       // Aaj ki summary
       stats: {
-        totalMins,       // FIX: ab real minutes hain
+        totalMins,
         avgPct,
         todayScreenshots:   todayShots.length,
         blockedScreenshots: blockedShots,
         pendingTasks,
         completedTasks,
         totalTasks:         tasks.length,
-        status:             emp.status     || "Offline",
+        status:             emp.status    || "Offline",
         currentApp:         emp.currentApp || "",
         activeTime:         emp.activeTime || "0h 0m",
       },

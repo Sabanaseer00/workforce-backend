@@ -118,7 +118,6 @@ export const createAlertFromScreenshot = async (shotData) => {
       productivity, screenshotId, time, date,
     } = shotData;
 
-    // Blocked app alert
     if (isBlocked || isBlockedApp(app, windowTitle)) {
       await Alert.create({
         employeeId: employeeId || empId,
@@ -137,7 +136,6 @@ export const createAlertFromScreenshot = async (shotData) => {
       });
     }
 
-    // Low productivity alert
     if (productivity < 30) {
       await Alert.create({
         employeeId: employeeId || empId,
@@ -153,13 +151,12 @@ export const createAlertFromScreenshot = async (shotData) => {
         resolved: false,
       });
     }
-    // ── NEW: Run Anomaly Detection ──
+
     await detectAnomalies(shotData);
   } catch (err) {
     console.error("Alert create error:", err.message);
-  } 
+  }
 };
-
 
 // ✅ GET MOST FLAGGED EMPLOYEES
 export const getFlaggedEmployees = async (req, res) => {
@@ -190,12 +187,10 @@ export const getFlaggedEmployees = async (req, res) => {
 
 // ══════════════════════════════════════════════════════
 //  📊 ANOMALY DETECTION ENGINE
-//  Pattern-based behavioral analysis
 // ══════════════════════════════════════════════════════
 
-// In-memory baselines (production mein Redis ya DB use karo)
-const employeeBaselines = {}; // { empId: { avgProductivity, usualApps, usualHours } }
-const recentProductivity = {}; // { empId: [scores] } — last 6 readings
+const employeeBaselines  = {};
+const recentProductivity = {};
 
 export const detectAnomalies = async (shotData) => {
   try {
@@ -208,12 +203,10 @@ export const detectAnomalies = async (shotData) => {
     const date  = new Date().toLocaleDateString();
     const hour  = new Date().getHours();
 
-    // ── 1. Track recent productivity ──
     if (!recentProductivity[empId]) recentProductivity[empId] = [];
     recentProductivity[empId].push(productivity);
-    if (recentProductivity[empId].length > 6) recentProductivity[empId].shift(); // last 1 hour (6 x 10min)
+    if (recentProductivity[empId].length > 6) recentProductivity[empId].shift();
 
-    // ── 2. Build/Update Baseline (simple rolling average) ──
     if (!employeeBaselines[empId]) {
       employeeBaselines[empId] = {
         avgProductivity: productivity,
@@ -231,67 +224,33 @@ export const detectAnomalies = async (shotData) => {
       b.totalReadings++;
     }
 
-    const baseline = employeeBaselines[empId];
-
-    // ── ANOMALY CHECK 1: Sudden Productivity Drop ──
+    // ANOMALY CHECK 1: Sudden Productivity Drop
     if (recentProductivity[empId].length >= 4) {
-      const recent = recentProductivity[empId];
+      const recent     = recentProductivity[empId];
       const latest2avg = (recent[recent.length-1] + recent[recent.length-2]) / 2;
       const older2avg  = (recent[0] + recent[1]) / 2;
       if (older2avg - latest2avg > 40 && older2avg > 60) {
         await Alert.create({
-          employeeId: empId,
-          employeeName,
-          department,
-          type: "productivity_drop",
-          app,
-          windowTitle,
-          severity: "high",
-          productivity,
-          time,
-          date,
-          resolved: false,
+          employeeId: empId, employeeName, department,
+          type: "productivity_drop", app, windowTitle,
+          severity: "high", productivity, time, date, resolved: false,
         });
-        console.log(`🚨 ANOMALY: Productivity drop for ${employeeName}: ${older2avg}% → ${latest2avg}%`);
+        console.log(`🚨 ANOMALY: Productivity drop for ${employeeName}`);
       }
     }
 
-    // ── ANOMALY CHECK 2: Unusual Login/Work Time ──
+    // ANOMALY CHECK 2: Unusual Login Time
     if (hour >= 23 || hour <= 4) {
       const existingAlert = await Alert.findOne({
-        employeeId: empId,
-        type: "unusual_login_time",
-        date,
-        resolved: false,
+        employeeId: empId, type: "unusual_login_time", date, resolved: false,
       });
       if (!existingAlert) {
         await Alert.create({
-          employeeId: empId,
-          employeeName,
-          department,
-          type: "unusual_login_time",
-          app,
-          severity: "medium",
-          productivity,
-          time,
-          date,
-          resolved: false,
+          employeeId: empId, employeeName, department,
+          type: "unusual_login_time", app,
+          severity: "medium", productivity, time, date, resolved: false,
         });
         console.log(`🚨 ANOMALY: Unusual work time for ${employeeName} at ${hour}:00`);
-      }
-    }
-
-    // ── ANOMALY CHECK 3: App Pattern Change ──
-    // Agar employee ne 10+ readings de hain aur achanak koi nayi app use kar raha hai
-    if (baseline.totalReadings > 10 && app) {
-      const appLower = app.toLowerCase();
-      // Developer suddenly using social/entertainment
-      const isDeveloper = baseline.usualApps.some(a =>
-        ["vs code", "intellij", "pycharm", "terminal"].includes(a.toLowerCase())
-      );
-      const isDistraction = ["youtube", "facebook", "netflix", "tiktok"].includes(appLower);
-      if (isDeveloper && isDistraction && productivity < 30) {
-        // (blocked_app alert already handles this, so skip duplicate)
       }
     }
 
@@ -300,15 +259,11 @@ export const detectAnomalies = async (shotData) => {
   }
 };
 
-// ── Screenshot Gap Detection (call this from a cron/interval) ──
-// Add in server.js: setInterval(checkScreenshotGaps, 5 * 60 * 1000);
+// ── Screenshot Gap Detection ──
 export const checkScreenshotGaps = async () => {
   try {
-<<<<<<< HEAD
-    const Screenshot = (await import("../models/screenshot.js")).default;
-=======
+    // ✅ FIXED: Sahi case wala Screenshot.js use karo
     const Screenshot = (await import("../models/Screenshot.js")).default;
->>>>>>> 9946b18a919f250714a3bb09d2c48c1e7e27f31f
     const Employee   = (await import("../models/Employee.js")).default;
 
     const thirtyMinsAgo = new Date(Date.now() - 30 * 60 * 1000);
@@ -325,11 +280,9 @@ export const checkScreenshotGaps = async () => {
       const gapMins = (Date.now() - new Date(lastShot.createdAt).getTime()) / (1000 * 60);
 
       if (gapMins > 30) {
-        const date = new Date().toLocaleDateString();
+        const date     = new Date().toLocaleDateString();
         const existing = await Alert.findOne({
-          employeeId: String(emp._id),
-          type: "screenshot_gap",
-          date,
+          employeeId: String(emp._id), type: "screenshot_gap", date,
         });
         if (!existing) {
           await Alert.create({
@@ -343,7 +296,7 @@ export const checkScreenshotGaps = async () => {
             date,
             resolved:     false,
           });
-          console.log(`🚨 Screenshot gap detected: ${emp.firstName} — ${Math.round(gapMins)} mins`);
+          console.log(`🚨 Screenshot gap: ${emp.firstName} — ${Math.round(gapMins)} mins`);
         }
       }
     }

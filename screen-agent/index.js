@@ -13,12 +13,16 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = path.dirname(__filename);
 
-const BACKEND = "http://localhost:5000";
+// ════════════════════════════════════════════════════════
+//  ✅ FIX #1: BACKEND URL — env variable se lo, localhost nahi
+//  .env file mein likho:
+//  BACKEND_URL=https://workforce-backend-production-cc13.up.railway.app
+// ════════════════════════════════════════════════════════
+const BACKEND = process.env.BACKEND_URL || "https://workforce-backend-production-cc13.up.railway.app";
+console.log("🌐 Backend URL:", BACKEND);
 
 // ═══════════════════════════════════════════════════════════════════════
 //  🚫 DISTRACTION APPS LIST — sirf detect karne ke liye (flagging)
-//  Yeh list BLOCK karne ke liye nahi, sirf screenshot/heartbeat mein
-//  "flagged" mark karne ke liye hai.
 // ═══════════════════════════════════════════════════════════════════════
 const FLAGGED_APPS = [
   { name: "YouTube",   keywords: ["youtube"] },
@@ -33,18 +37,13 @@ const FLAGGED_APPS = [
 
 // ═══════════════════════════════════════════════════════════════════════
 //  🔥 DYNAMIC APP BLOCKER
-//  Admin Chrome extension se jo sites block kare, wohi yahan aayengi.
-//  Hardcoded list nahi — backend se fetch hogi.
 // ═══════════════════════════════════════════════════════════════════════
-
 const HOSTS_FILE         = "C:\\Windows\\System32\\drivers\\etc\\hosts";
 const BLOCK_MARKER_START = "# WORKTRACK_BLOCK_START";
 const BLOCK_MARKER_END   = "# WORKTRACK_BLOCK_END";
 
-// Runtime mein admin-blocked sites store hoti hain
 let _adminBlockedSites = [];
 
-// ── Backend se admin-blocked sites fetch karo ──
 async function fetchAdminBlockedSites() {
   if (!employeeData?.token) return [];
   try {
@@ -52,7 +51,6 @@ async function fetchAdminBlockedSites() {
       headers: { Authorization: `Bearer ${employeeData.token}` },
       timeout: 5000,
     });
-    // Backend array of { domain: "youtube.com" } ya sirf strings return kare
     const sites = res.data?.sites || res.data || [];
     const domains = sites.map(s => (typeof s === "string" ? s : s.domain)).filter(Boolean);
     console.log(`🔒 Admin blocked sites fetched (${domains.length}):`, domains.join(", ") || "none");
@@ -63,12 +61,9 @@ async function fetchAdminBlockedSites() {
   }
 }
 
-// ── Hosts file update karo (sirf admin-blocked sites ke liye) ──
 function applyHostsBlock(sites) {
   try {
     let content = fs.readFileSync(HOSTS_FILE, "utf8");
-
-    // Pehle purani WorkTrack entries hata do
     const startIdx = content.indexOf(BLOCK_MARKER_START);
     const endIdx   = content.indexOf(BLOCK_MARKER_END);
     if (startIdx !== -1 && endIdx !== -1) {
@@ -77,8 +72,6 @@ function applyHostsBlock(sites) {
               + content.slice(endIdx + BLOCK_MARKER_END.length);
     }
     content = content.trim();
-
-    // Agar koi site block karni hai tabhi entries likho
     if (sites.length > 0) {
       const blockLines = [];
       sites.forEach(domain => {
@@ -90,10 +83,8 @@ function applyHostsBlock(sites) {
     } else {
       content += "\n";
     }
-
     fs.writeFileSync(HOSTS_FILE, content, "utf8");
     execSync("ipconfig /flushdns", { stdio: "ignore" });
-
     if (sites.length > 0) {
       console.log(`🚫 Hosts: ${sites.length} site(s) blocked`);
     } else {
@@ -104,18 +95,11 @@ function applyHostsBlock(sites) {
   }
 }
 
-// ── Firewall rules update karo (sirf admin-blocked sites ke liye) ──
 function applyFirewallBlock(sites) {
   try {
-    // Pehle sab purane WorkTrack firewall rules hatao
     try {
-      execSync(
-        `netsh advfirewall firewall delete rule name="WORKTRACK_*"`,
-        { stdio: "ignore" }
-      );
+      execSync(`netsh advfirewall firewall delete rule name="WORKTRACK_*"`, { stdio: "ignore" });
     } catch {}
-
-    // Naye rules sirf admin-blocked sites ke liye banao
     sites.forEach(domain => {
       const clean    = domain.replace(/^www\./, "");
       const ruleName = `WORKTRACK_${clean.replace(/\./g, "_")}`;
@@ -126,7 +110,6 @@ function applyFirewallBlock(sites) {
         );
       } catch {}
     });
-
     if (sites.length > 0) {
       console.log(`🔥 Firewall: ${sites.length} site(s) blocked`);
     } else {
@@ -137,37 +120,26 @@ function applyFirewallBlock(sites) {
   }
 }
 
-// ── MAIN: Admin sites fetch karke block karo ──
 async function blockEverything() {
   console.log("🚫 Work mode ON — admin blocked sites fetch ho rahi hain...");
   _adminBlockedSites = await fetchAdminBlockedSites();
   applyHostsBlock(_adminBlockedSites);
   applyFirewallBlock(_adminBlockedSites);
-  if (_adminBlockedSites.length === 0) {
-    console.log("ℹ️ Abhi admin ne koi site block nahi ki.");
-  } else {
-    console.log("🚫 Admin blocked sites apply ho gayi!");
-  }
 }
 
-// ── MAIN: Sab unblock karo ──
 function unblockEverything() {
   console.log("✅ Work mode OFF — sab unblock ho raha hai...");
-  applyHostsBlock([]);      // Hosts entries hata do
-  applyFirewallBlock([]);   // Firewall rules hata do
+  applyHostsBlock([]);
+  applyFirewallBlock([]);
   _adminBlockedSites = [];
-  console.log("✅ Everything unblocked!");
 }
 
-// ── Admin ne naya site block/unblock kiya toh real-time update ──
-// (Socket event ya polling se call karo)
 async function refreshAdminBlockedSites() {
   if (!employeeData?.token) return;
   const newSites = await fetchAdminBlockedSites();
   const changed  =
     newSites.length !== _adminBlockedSites.length ||
     newSites.some(s => !_adminBlockedSites.includes(s));
-
   if (changed) {
     console.log("🔄 Admin blocked sites update ho gayi — re-applying...");
     _adminBlockedSites = newSites;
@@ -206,37 +178,55 @@ function isSystemIdle(title) {
 function ttApi(path, method = "GET", body = null) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
-    const req  = http.request({
-      hostname: "localhost", port: 5000,
-      path: "/api" + path, method,
+    // ✅ FIX: Railway URL parse karo host/port ke liye
+    const backendUrl = new URL(BACKEND);
+    const isHttps    = backendUrl.protocol === "https:";
+    const port       = backendUrl.port ? parseInt(backendUrl.port) : (isHttps ? 443 : 80);
+
+    const options = {
+      hostname: backendUrl.hostname,
+      port,
+      path: "/api" + path,
+      method,
       headers: {
         "Content-Type": "application/json",
         ...(_ttToken && { Authorization: `Bearer ${_ttToken}` }),
         ...(data && { "Content-Length": Buffer.byteLength(data) }),
       },
-    }, (res) => {
-      let raw = "";
-      res.on("data", c => raw += c);
-      res.on("end", () => {
-        if (res.statusCode === 204) return resolve(null);
-        if (res.statusCode >= 400) return reject(new Error(`HTTP ${res.statusCode}: ${raw.slice(0,200)}`));
-        try { resolve(JSON.parse(raw)); } catch { resolve(raw); }
-      });
-    });
-    req.on("error", reject);
-    if (data) req.write(data);
-    req.end();
+    };
+
+    // ✅ FIX: HTTPS use karo Railway ke liye
+    const lib = isHttps ? (await import("https")).default : http;
+    // Note: Since this is sync-style, we use axios instead for Railway
+    // See ttApiFetch below — yeh function Railway ke liye replace ho gaya hai
+    reject(new Error("Use ttApiFetch instead for HTTPS support"));
   });
+}
+
+// ✅ FIX: ttApi ko axios-based function se replace karo (HTTPS support)
+async function ttApiFetch(apiPath, method = "GET", body = null) {
+  const config = {
+    method,
+    url: `${BACKEND}/api${apiPath}`,
+    headers: {
+      "Content-Type": "application/json",
+      ...(_ttToken && { Authorization: `Bearer ${_ttToken}` }),
+    },
+    timeout: 8000,
+  };
+  if (body) config.data = body;
+  const res = await axios(config);
+  return res.data;
 }
 
 async function ttFetch() {
   if (!_ttToken) return;
   try {
     let tasks = null;
-    try { tasks = await ttApi("/tasks/mine"); } catch {}
+    try { tasks = await ttApiFetch("/tasks/mine"); } catch {}
     if (!Array.isArray(tasks)) {
       try {
-        const all = await ttApi("/tasks");
+        const all = await ttApiFetch("/tasks");
         if (Array.isArray(all)) {
           tasks = all.filter(t =>
             String(t.assigned_to?._id ?? t.assigned_to ?? "") === String(_ttEmpId)
@@ -253,7 +243,7 @@ async function ttFetch() {
 
 async function ttPatch(taskId, newStatus) {
   try {
-    await ttApi(`/tasks/${taskId}/status`, "PATCH", { status: newStatus });
+    await ttApiFetch(`/tasks/${taskId}/status`, "PATCH", { status: newStatus });
     console.log(`[TT] ✅ Task ${taskId} → ${newStatus}`);
     _ttTasks = _ttTasks.map(t =>
       String(t._id||t.id) === String(taskId) ? {...t, status: newStatus} : t
@@ -267,7 +257,7 @@ async function ttPatch(taskId, newStatus) {
     try {
       const task = _ttTasks.find(t => String(t._id||t.id) === String(taskId));
       if (task) {
-        await ttApi(`/tasks/${taskId}`, "PUT", {
+        await ttApiFetch(`/tasks/${taskId}`, "PUT", {
           assigned_to:  String(task.assigned_to?._id ?? task.assigned_to ?? ""),
           title:        task.title,
           description:  task.description || "",
@@ -297,21 +287,17 @@ async function ttCheck() {
       await ttFetch();
       _fetchCtr = 0;
     }
-
     const win   = await activeWin();
     const title = win?.title || win?.owner?.name || "";
     console.log(`[TT] Active window: "${title.slice(0, 70)}"`);
-
     let isIdle = isSystemIdle(title);
     try {
       const { powerMonitor } = pkg;
       const idleSecs = powerMonitor.getSystemIdleTime();
       if (idleSecs > 120) { isIdle = true; console.log(`[TT] System idle: ${idleSecs}s`); }
     } catch {}
-
     const pending    = _ttTasks.filter(t => t.status === "pending");
     const inProgress = _ttTasks.filter(t => t.status === "in_progress");
-
     if (isIdle) {
       if (_ttActiveId) {
         _idleCount++;
@@ -325,23 +311,20 @@ async function ttCheck() {
       }
       return;
     }
-
     _idleCount = 0;
-
     if (pending.length > 0) {
       const tid = String(pending[0]._id || pending[0].id);
       const ok  = await ttPatch(tid, "in_progress");
       if (ok) { _ttActiveId = tid; _fetchCtr = 3; }
       return;
     }
-
     if (inProgress.length > 0) {
       _ttActiveId = String(inProgress[0]._id || inProgress[0].id);
     }
   } catch (e) { console.log("[TT] check error:", e.message); }
 }
 
-async function ttSocket() {
+async function ttSocketConnect() {
   try {
     let ioFn;
     try {
@@ -357,7 +340,7 @@ async function ttSocket() {
       reconnection: true,
     });
     _ttSocket.on("connect", () => {
-      console.log("[TT] Socket connected");
+      console.log("[TT] Socket connected to:", BACKEND);
       _ttSocket.emit("join", `emp_${_ttEmpId}`);
       _ttSocket.emit("join", "admins");
     });
@@ -367,13 +350,10 @@ async function ttSocket() {
         String(t._id||t.id) === String(p._id||p.taskId) ? {...t, ...p} : t
       );
     });
-
-    // ── Admin ne blocked sites update ki toh real-time refresh ──
     _ttSocket.on("blockedSites:update", () => {
       console.log("🔔 Admin ne blocked sites update ki — refresh ho rahi hain...");
       refreshAdminBlockedSites();
     });
-
     _ttSocket.on("disconnect",    () => console.log("[TT] Socket disconnected"));
     _ttSocket.on("connect_error", e  => console.log("[TT] Socket error:", e.message));
   } catch (e) { console.log("[TT] socket error:", e.message); }
@@ -384,7 +364,7 @@ async function ttStart(token, empId) {
   _ttEmpId = empId;
   console.log(`[TT] Starting for employee: ${empId}`);
   await ttFetch();
-  await ttSocket();
+  await ttSocketConnect();
   ttCheck();
   _ttTimer = setInterval(ttCheck, CHECK_INTERVAL);
 }
@@ -395,8 +375,10 @@ function ttStop() {
   _ttTimer = null; _ttSocket = null; _ttActiveId = null; _idleCount = 0;
   console.log("[TT] Stopped");
 }
-// ═══════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════
+//  APP SETUP
+// ═══════════════════════════════════════════════════════════════════════
 let mainWin        = null;
 let loginWin       = null;
 let captureInterval = null;
@@ -442,6 +424,11 @@ function getFlaggedInfo(appName, windowTitle) {
     return { isFlagged: true, flaggedAppName: b.name };
   return { isFlagged: false, flaggedAppName: null };
 }
+
+// ════════════════════════════════════════════════════════
+//  ✅ FIX #2: LOGIN WINDOW — frontend URL bhi env se lo
+// ════════════════════════════════════════════════════════
+const FRONTEND_URL = process.env.FRONTEND_URL || "https://workforce-frontend-ten.vercel.app";
 
 function createLoginWindow() {
   loginWin = new BrowserWindow({
@@ -498,7 +485,9 @@ function createMainWindow() {
     width: 1200, height: 800,
     webPreferences: { nodeIntegration: false, contextIsolation: true },
   });
-  mainWin.loadURL("http://localhost:5173");
+  // ✅ FIX: Vercel deployed frontend load karo
+  mainWin.loadURL(FRONTEND_URL);
+  console.log("🌐 Loading frontend:", FRONTEND_URL);
 }
 
 async function sendHeartbeat(activeApp, windowTitle, mouseEvents, keyEvents) {
@@ -512,10 +501,52 @@ async function sendHeartbeat(activeApp, windowTitle, mouseEvents, keyEvents) {
   } catch(e) { console.log("❌ Heartbeat error:", e.message); }
 }
 
+// ════════════════════════════════════════════════════════
+//  ✅ FIX #3: SCREENSHOT — desktopCapturer ko sahi tarah use karo
+//  desktopCapturer main process mein kaam karta hai Electron 13+ mein
+//  lekin getSources async hai aur try-catch zarori hai
+// ════════════════════════════════════════════════════════
 async function takeScreenshot() {
-  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1280, height: 720 } });
-  if (!sources || sources.length === 0) throw new Error("No screen source");
-  return await sharp(sources[0].thumbnail.toPNG()).jpeg({ quality: 60 }).toBuffer();
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width: 1280, height: 720 },
+    });
+
+    if (!sources || sources.length === 0) {
+      throw new Error("No screen sources found — check screen capture permissions");
+    }
+
+    const source = sources[0];
+    const nativeImage = source.thumbnail;
+
+    if (!nativeImage || nativeImage.isEmpty()) {
+      throw new Error("Screen thumbnail is empty — screen capture may be blocked");
+    }
+
+    const pngBuffer = nativeImage.toPNG();
+    if (!pngBuffer || pngBuffer.length === 0) {
+      throw new Error("PNG buffer empty");
+    }
+
+    // Sharp se compress karo
+    const jpegBuffer = await sharp(pngBuffer)
+      .jpeg({ quality: 60 })
+      .toBuffer();
+
+    console.log(`📸 Screenshot captured: ${Math.round(jpegBuffer.length / 1024)}KB`);
+    return jpegBuffer;
+
+  } catch (err) {
+    console.error("❌ Screenshot error:", err.message);
+
+    // ✅ FIX: macOS pe screen recording permission check
+    if (process.platform === "darwin" && err.message.includes("blocked")) {
+      console.error("💡 macOS: System Preferences > Security > Screen Recording mein permission do");
+    }
+
+    throw err;
+  }
 }
 
 async function captureScreen() {
@@ -528,7 +559,8 @@ async function captureScreen() {
     const { isFlagged, flaggedAppName } = getFlaggedInfo(rawAppName, windowTitle);
     await sendHeartbeat(smartApp, windowTitle, 5, 3);
 
-    const base64 = "data:image/jpeg;base64," + (await takeScreenshot()).toString("base64");
+    const screenshotBuffer = await takeScreenshot();
+    const base64 = "data:image/jpeg;base64," + screenshotBuffer.toString("base64");
 
     await axios.post(`${BACKEND}/api/screenshots/live`, {
       employeeId:   employeeData.id,
@@ -545,10 +577,18 @@ async function captureScreen() {
       time:         new Date().toLocaleTimeString(),
       date:         new Date().toLocaleDateString(),
       productivity: isFlagged ? Math.floor(Math.random()*15)+5 : Math.floor(Math.random()*30)+65,
-    }, { headers: { Authorization: `Bearer ${employeeData.token}` }, timeout: 10000 });
+    }, {
+      headers: { Authorization: `Bearer ${employeeData.token}` },
+      timeout: 15000, // ✅ FIX: Railway slow hoti hai, timeout badha do
+      maxContentLength: 50 * 1024 * 1024, // 50MB max
+    });
 
     console.log(`📸 ${employeeData.name} | ${smartApp} ${isFlagged ? "🚨 FLAGGED" : "✅"}`);
-  } catch(e) { console.log("❌ Capture error:", e.message); }
+  } catch(e) {
+    console.log("❌ Capture error:", e.message);
+    // ✅ FIX: Screenshot fail hone pe heartbeat band mat karo
+    // Sirf log karo aur agle interval mein try karo
+  }
 }
 
 function startCapture() {
@@ -570,29 +610,26 @@ async function goOffline() {
 }
 
 // ══════════════════════════════════════════════════════
-//  🔴 LOGOUT — sab band karo, apps unblock karo
+//  IPC HANDLERS
 // ══════════════════════════════════════════════════════
 ipcMain.on("employee-logout", async () => {
   console.log("🔄 Logout ho raha hai...");
   stopCapture();
   ttStop();
   await goOffline();
-
-  // ✅ LOGOUT PE: Sab unblock karo
   unblockEverything();
-
   clearToken();
   employeeData = null;
   if (mainWin) { mainWin.close(); mainWin = null; }
   createLoginWindow();
 });
 
-// ══════════════════════════════════════════════════════
-//  🟢 LOGIN — monitoring shuru, admin sites block karo
-// ══════════════════════════════════════════════════════
 ipcMain.on("do-login", async (event, { email, pwd }) => {
   try {
-    const res = await axios.post(`${BACKEND}/api/auth/login`, { email, password: pwd, role: "employee" });
+    const res = await axios.post(`${BACKEND}/api/auth/login`, {
+      email, password: pwd, role: "employee"
+    }, { timeout: 10000 });
+
     employeeData = {
       token:      res.data.token,
       id:         res.data.user?.id,
@@ -607,16 +644,18 @@ ipcMain.on("do-login", async (event, { email, pwd }) => {
     createMainWindow();
     startCapture();
     ttStart(employeeData.token, employeeData.id);
-
-    // ✅ LOGIN PE: Admin ki blocked sites fetch karke apply karo
     await blockEverything();
-
     console.log(`✅ Logged in: ${employeeData.name}`);
   } catch(e) {
-    event.sender.send("login-error", e?.response?.data?.message || "Login failed");
+    const msg = e?.response?.data?.message || e.message || "Login failed";
+    console.error("❌ Login error:", msg);
+    event.sender.send("login-error", msg);
   }
 });
 
+// ══════════════════════════════════════════════════════
+//  APP READY
+// ══════════════════════════════════════════════════════
 app.whenReady().then(async () => {
   initPaths();
   const saved = loadSavedToken();
@@ -629,10 +668,7 @@ app.whenReady().then(async () => {
       createMainWindow();
       startCapture();
       ttStart(employeeData.token, employeeData.id);
-
-      // ✅ AUTO LOGIN PE BHI: Admin ki blocked sites apply karo
       await blockEverything();
-
     } else {
       console.log("⚠️ Token expire ho gaya — login page");
       clearToken(); createLoginWindow();
@@ -640,18 +676,12 @@ app.whenReady().then(async () => {
   } else { createLoginWindow(); }
 });
 
-// ══════════════════════════════════════════════════════
-//  App band hone pe bhi unblock karo
-// ══════════════════════════════════════════════════════
 app.on("before-quit", async (e) => {
   e.preventDefault();
   stopCapture();
   ttStop();
   await goOffline();
-
-  // ✅ APP BAND HONE PE: Unblock karo
   unblockEverything();
-
   app.exit(0);
 });
 

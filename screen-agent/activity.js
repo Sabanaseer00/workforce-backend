@@ -1,15 +1,13 @@
 // activity.js — Electron Agent ke liye Complete Activity Tracker
-// Yeh file:
-// 1. Employee login/logout track karti hai
-// 2. Current active app track karti hai
-// 3. Mouse/keyboard events count karti hai (activity %)
-// 4. Har 10s pe heartbeat bhejti hai backend ko
-// 5. App usage time calculate karti hai
 
 import activeWin from "active-win";
 import axios from "axios";
 
-const BACKEND = "http://localhost:5000";
+// ════════════════════════════════════════════════════════
+//  ✅ FIX: BACKEND URL — env variable se lo, localhost nahi
+// ════════════════════════════════════════════════════════
+const BACKEND = process.env.BACKEND_URL || "https://workforce-backend-production-cc13.up.railway.app";
+console.log("[Activity] Backend URL:", BACKEND);
 
 // ── Productive apps list ──
 const PRODUCTIVE_APPS = [
@@ -40,28 +38,22 @@ const BLOCKED_APPS = [
 ];
 
 // ── State ──
-let employeeData    = null;   // { token, id, empId, name }
+let employeeData    = null;
 let heartbeatTimer  = null;
 let activityTimer   = null;
 
-// Counters — reset har 10s pe
 let mouseEvents = 0;
 let keyEvents   = 0;
 
-// App usage tracking
-let appUsageMap = {};         // { appName: totalSeconds }
-let currentAppStart = null;   // Date — jab current app start hua
-let lastApp = "";             // pichla active app
+let appUsageMap = {};
+let currentAppStart = null;
+let lastApp = "";
 
 // ── Mouse/Keyboard counter setup ──
-// Electron mein globalShortcut ya uiohook use hoti hai
-// Yahan hum simple polling se activity estimate karte hain
-// (Agar uiohook install hai toh woh better hai)
 let _uiohook = null;
 
 async function setupInputTracking() {
   try {
-    // uiohook-napi try karo
     const { UiohookKey, uIOhook } = await import("uiohook-napi");
     _uiohook = uIOhook;
     uIOhook.on("mousemove", () => { mouseEvents++; });
@@ -71,7 +63,6 @@ async function setupInputTracking() {
     console.log("✅ uiohook active — real mouse/keyboard tracking");
   } catch (e) {
     console.log("⚠ uiohook not available — using window poll for activity estimate");
-    // Fallback: agar active window change hota rahe toh activity maano
   }
 }
 
@@ -89,13 +80,10 @@ function getSmartAppName(appName, windowTitle) {
 // ── Status compute ──
 function computeStatus(appName, windowTitle, mouseCount, keyCount) {
   const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
-
   for (const m of MEETING_APPS) {
     if (combined.includes(m.toLowerCase())) return "Meeting";
   }
-
   const totalEvents = mouseCount + keyCount;
-
   if (totalEvents > 15) return "Working";
   if (totalEvents > 0)  return "Active";
   return "Idle";
@@ -104,26 +92,23 @@ function computeStatus(appName, windowTitle, mouseCount, keyCount) {
 // ── Activity percent ──
 function computeActivityPct(mouseCount, keyCount) {
   const total = mouseCount + keyCount;
-  // 20+ events in 10s = 100% active
   return Math.min(100, Math.round((total / 20) * 100));
 }
 
 // ── App usage update ──
 function updateAppUsage(newApp) {
   const now = new Date();
-
   if (lastApp && currentAppStart) {
     const seconds = Math.round((now - currentAppStart) / 1000);
     if (seconds > 0) {
       appUsageMap[lastApp] = (appUsageMap[lastApp] || 0) + seconds;
     }
   }
-
-  lastApp        = newApp;
+  lastApp         = newApp;
   currentAppStart = now;
 }
 
-// ── Format seconds to "Xh Ym" ──
+// ── Format seconds ──
 function formatTime(seconds) {
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
@@ -131,7 +116,6 @@ function formatTime(seconds) {
   return `${m}m`;
 }
 
-// ── Get active time (total time online today) ──
 let sessionStart = null;
 
 function getActiveTime() {
@@ -145,14 +129,11 @@ function getActiveMinsToday() {
   return Math.round((new Date() - sessionStart) / 1000 / 60);
 }
 
-// ── Top apps list ──
 function getTopApps() {
   const entries = Object.entries(appUsageMap)
     .sort((a, b) => b[1] - a[1])
     .slice(0, 6);
-
   const total = entries.reduce((s, [, v]) => s + v, 1);
-
   return entries.map(([name, seconds]) => ({
     name,
     pct:  Math.round((seconds / total) * 100),
@@ -160,26 +141,21 @@ function getTopApps() {
   }));
 }
 
-// ── HEARTBEAT — har 10s backend ko update bhejo ──
+// ── HEARTBEAT ──
 async function sendHeartbeat() {
   if (!employeeData?.token || !employeeData?.id) return;
-
   try {
-    // Active window fetch karo
     const activeWindow = await activeWin().catch(() => null);
     const rawApp    = activeWindow?.owner?.name || "";
     const winTitle  = activeWindow?.title       || "";
     const smartApp  = getSmartAppName(rawApp, winTitle);
 
-    // App usage track karo
     if (smartApp !== lastApp) {
       updateAppUsage(smartApp);
     }
 
     const curMouse = mouseEvents;
     const curKey   = keyEvents;
-
-    // Reset counters
     mouseEvents = 0;
     keyEvents   = 0;
 
@@ -189,8 +165,8 @@ async function sendHeartbeat() {
     const activeMins  = getActiveMinsToday();
     const topApps     = getTopApps();
 
-    // Backend ko bhejo
-    const res = await axios.post(
+    // ✅ FIX: Railway deployed backend ko POST karo
+    await axios.post(
       `${BACKEND}/api/employees/heartbeat`,
       {
         employeeId:      employeeData.id,
@@ -216,7 +192,13 @@ async function sendHeartbeat() {
       `💓 Heartbeat | App: ${smartApp} | Status: ${status} | Activity: ${activityPct}% | Active: ${activeTime}`
     );
   } catch (err) {
-    console.error("❌ Heartbeat error:", err?.response?.data?.message || err.message);
+    // ✅ FIX: Network error pe crash mat karo — sirf log karo
+    const msg = err?.response?.data?.message || err.message;
+    console.error("❌ Heartbeat error:", msg);
+    // Agar 401 aaye toh token expire ho gaya
+    if (err?.response?.status === 401) {
+      console.error("⚠️ Token expired — employee ko dobara login karna hoga");
+    }
   }
 }
 
@@ -231,14 +213,10 @@ export async function startTracking(empData) {
   currentAppStart = new Date();
 
   console.log(`🟢 Tracking started for: ${empData.name}`);
+  console.log(`🌐 Sending data to: ${BACKEND}`);
 
-  // Input tracking setup
   await setupInputTracking();
-
-  // Pehla heartbeat turant
   await sendHeartbeat();
-
-  // Har 10s pe heartbeat
   heartbeatTimer = setInterval(sendHeartbeat, 10000);
 }
 
@@ -246,16 +224,13 @@ export async function startTracking(empData) {
 export async function stopTracking() {
   if (!employeeData) return;
 
-  // Timers clear karo
   if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; }
   if (activityTimer)  { clearInterval(activityTimer);  activityTimer  = null; }
 
-  // uiohook stop karo
   if (_uiohook) {
     try { _uiohook.stop(); } catch(e) {}
   }
 
-  // Backend ko offline mark karo
   try {
     await axios.post(
       `${BACKEND}/api/employees/go-offline`,
@@ -275,7 +250,6 @@ export async function stopTracking() {
   console.log("⏹ Tracking stopped");
 }
 
-// ── Cleanup on app quit ──
 export async function cleanupOnQuit() {
   await stopTracking();
 }

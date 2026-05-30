@@ -1,7 +1,9 @@
 // main.js — WorkTrack Electron Agent
 // ═══════════════════════════════════════════════════════════════════════
 // screenshot-desktop → sharp compress → base64 → Railway backend
-// Railway pe koi body limit nahi (Vercel wali 4.5MB problem nahi)
+// Dynamic site blocking — admin dashboard se control
+// Tamper watcher — employee hosts edit na kar sake
+// Auto admin relaunch — admin rights automatic
 // ═══════════════════════════════════════════════════════════════════════
 
 import pkg from "electron";
@@ -34,7 +36,7 @@ const FRONTEND = process.env.FRONTEND_URL
 console.log("🌐 Backend :", BACKEND);
 console.log("🖥  Frontend:", FRONTEND);
 
-// ── Flagged Apps ───────────────────────────────────────────────────────
+// ── Flagged Apps (detect karne ke liye) ───────────────────────────────
 const FLAGGED_APPS = [
   { name: "YouTube",   keywords: ["youtube"]          },
   { name: "Facebook",  keywords: ["facebook"]         },
@@ -53,28 +55,89 @@ const BLOCK_MARKER_END   = "# WORKTRACK_BLOCK_END";
 
 let _adminBlockedSites = [];
 let _isAdminMode       = false;
+let _watcherInterval   = null;
 
-function checkAdminPrivileges() {
+// ── Auto Admin Relaunch ────────────────────────────────────────────────
+function isRunningAsAdmin() {
   try {
     execSync("net session", { stdio: "ignore" });
-    _isAdminMode = true;
-    console.log("🔑 Admin mode — site blocking enabled");
+    return true;
   } catch {
-    _isAdminMode = false;
-    console.warn("⚠️  No admin rights — site blocking skipped (Run as Administrator)");
+    return false;
   }
 }
 
+function relaunchAsAdmin() {
+  try {
+    const psLines = [
+      `$exe = '${process.execPath.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`,
+      `$dir = '${__dirname.replace(/\\/g, "\\\\").replace(/'/g, "''")}'`,
+      `Start-Process -FilePath $exe -ArgumentList $dir -Verb RunAs`,
+    ].join("\r\n");
+
+    const psFile = path.join(
+      process.env.TEMP || "C:\\Windows\\Temp",
+      "worktrack_relaunch.ps1"
+    );
+    fs.writeFileSync(psFile, psLines, "utf8");
+    execSync(`powershell.exe -ExecutionPolicy Bypass -NonInteractive -File "${psFile}"`, {
+      stdio: "inherit",
+    });
+    app.exit(0);
+  } catch (e) {
+    console.error("❌ Admin relaunch failed:", e.message);
+    const { dialog } = pkg;
+    dialog.showMessageBoxSync({
+      type: "warning",
+      title: "Administrator Required",
+      message: "VS Code band karo\nRight Click → Run as Administrator\nPhir npm start chalao",
+      buttons: ["OK"],
+    });
+    app.exit(0);
+  }
+}
+
+function checkAdminPrivileges() {
+  if (isRunningAsAdmin()) {
+    _isAdminMode = true;
+    console.log("🔑 Admin mode — site blocking enabled");
+  } else {
+    _isAdminMode = false;
+    console.warn("⚠️  No admin rights — site blocking skipped");
+  }
+}
+
+// ── Domain cleaner — URL se clean domain nikalta hai ──────────────────
+function cleanDomain(raw) {
+  if (!raw) return "";
+  raw = raw.trim();
+  try {
+    // agar full URL hai jaise https://www.facebook.com/
+    if (raw.startsWith("http://") || raw.startsWith("https://")) {
+      raw = new URL(raw).hostname; // → www.facebook.com
+    }
+  } catch (e) {
+    // invalid URL — as-is use karo
+  }
+  // www. hata do
+  return raw.replace(/^www\./, "").toLowerCase(); // → facebook.com
+}
+
+// ── Dynamic fetch from backend ─────────────────────────────────────────
 async function fetchAdminBlockedSites() {
   if (!employeeData?.token) return [];
   try {
-    const res = await axios.get(`${BACKEND}/api/blocked-sites`, {
+    const res = await axios.get(`${BACKEND}/api/blocked-apps/sites`, {
       headers: { Authorization: `Bearer ${employeeData.token}` },
       timeout: 8000,
     });
     const sites   = res.data?.sites || res.data || [];
     const domains = sites
-      .map(s => (typeof s === "string" ? s : s.domain))
+      .map(s => {
+        // s string bhi ho sakti hai ya object
+        const raw = typeof s === "string" ? s : (s.domain || s.identifier || s.url || "");
+        return cleanDomain(raw);
+      })
       .filter(Boolean);
     console.log(`🔒 Blocked sites (${domains.length}):`, domains.join(", ") || "none");
     return domains;
@@ -84,6 +147,7 @@ async function fetchAdminBlockedSites() {
   }
 }
 
+// ── Hosts file ────────────────────────────────────────────────────────
 function applyHostsBlock(sites) {
   if (!_isAdminMode) return;
   try {
@@ -96,7 +160,7 @@ function applyHostsBlock(sites) {
     if (sites.length > 0) {
       const lines = [];
       sites.forEach(d => {
-        const c = d.replace(/^www\./, "");
+        const c = cleanDomain(d); // extra safety
         lines.push(`127.0.0.1   ${c}`, `127.0.0.1   www.${c}`);
       });
       content += `\n\n${BLOCK_MARKER_START}\n${lines.join("\n")}\n${BLOCK_MARKER_END}\n`;
@@ -111,15 +175,16 @@ function applyHostsBlock(sites) {
   }
 }
 
+// ── Firewall ──────────────────────────────────────────────────────────
 function applyFirewallBlock(sites) {
   if (!_isAdminMode) return;
   try {
     try { execSync(`netsh advfirewall firewall delete rule name="WORKTRACK_*"`, { stdio: "ignore" }); } catch {}
     sites.forEach(domain => {
-      const c = domain.replace(/^www\./, "");
+      const c = cleanDomain(domain); // extra safety
       try {
         execSync(
-          `netsh advfirewall firewall add rule name="WORKTRACK_${c.replace(/\./g,"_")}" dir=out action=block remotehost="${c}" enable=yes`,
+          `netsh advfirewall firewall add rule name="WORKTRACK_${c.replace(/\./g, "_")}" dir=out action=block remotehost="${c}" enable=yes`,
           { stdio: "ignore" }
         );
       } catch {}
@@ -130,6 +195,7 @@ function applyFirewallBlock(sites) {
   }
 }
 
+// ── Block / Unblock ───────────────────────────────────────────────────
 async function blockEverything() {
   if (!_isAdminMode) { console.log("⏭️  Blocking skipped — no admin"); return; }
   _adminBlockedSites = await fetchAdminBlockedSites();
@@ -145,7 +211,30 @@ function unblockEverything() {
   console.log("✅ All sites unblocked");
 }
 
-// ── Screenshot — screenshot-desktop + sharp ────────────────────────────
+// ── Tamper Watcher ────────────────────────────────────────────────────
+function startTamperWatcher() {
+  if (_watcherInterval) clearInterval(_watcherInterval);
+  _watcherInterval = setInterval(() => {
+    try {
+      const content = fs.readFileSync(HOSTS_FILE, "utf8");
+      if (_adminBlockedSites.length > 0 && !content.includes(BLOCK_MARKER_START)) {
+        console.log("⚠️  Tamper detected — re-blocking!");
+        applyHostsBlock(_adminBlockedSites);
+        applyFirewallBlock(_adminBlockedSites);
+      }
+    } catch (e) {
+      console.error("❌ Watcher error:", e.message);
+    }
+  }, 30_000);
+  console.log("👁️  Tamper watcher started");
+}
+
+function stopTamperWatcher() {
+  if (_watcherInterval) { clearInterval(_watcherInterval); _watcherInterval = null; }
+  console.log("👁️  Tamper watcher stopped");
+}
+
+// ── Screenshot ────────────────────────────────────────────────────────
 async function takeScreenshot() {
   const rawBuffer = await screenshot({ format: "png" });
   const compressed = await sharp(rawBuffer)
@@ -155,7 +244,7 @@ async function takeScreenshot() {
   return "data:image/jpeg;base64," + compressed.toString("base64");
 }
 
-// ── App name helpers ───────────────────────────────────────────────────
+// ── App name helpers ──────────────────────────────────────────────────
 function getSmartAppName(appName, windowTitle) {
   const combined = ((appName || "") + " " + (windowTitle || "")).toLowerCase();
   for (const b of FLAGGED_APPS)
@@ -178,7 +267,7 @@ function getFlaggedInfo(appName, windowTitle) {
   return { isFlagged: false, flaggedAppName: null };
 }
 
-// ── Screenshot capture loop ────────────────────────────────────────────
+// ── Screenshot capture loop ───────────────────────────────────────────
 let captureInterval = null;
 
 async function captureScreen() {
@@ -227,7 +316,6 @@ async function captureScreen() {
         maxBodyLength: 10 * 1024 * 1024,
       }
     );
-
     console.log(`📸 ${employeeData.name} | ${smartApp}${isFlagged ? " 🚨 FLAGGED" : " ✅"}`);
   } catch (e) {
     console.error("❌ captureScreen error:", e.message);
@@ -244,7 +332,7 @@ function stopCapture() {
   if (captureInterval) { clearInterval(captureInterval); captureInterval = null; }
 }
 
-// ── Electron Auth ──────────────────────────────────────────────────────
+// ── Electron Auth ─────────────────────────────────────────────────────
 let mainWin      = null;
 let loginWin     = null;
 let employeeData = null;
@@ -281,7 +369,7 @@ async function validateToken(token) {
   }
 }
 
-// ── Login window ───────────────────────────────────────────────────────
+// ── Login window ──────────────────────────────────────────────────────
 function createLoginWindow() {
   loginWin = new BrowserWindow({
     width: 420, height: 540, resizable: false, center: true,
@@ -364,24 +452,26 @@ function createMainWindow() {
   mainWin.on("closed", () => { mainWin = null; });
 }
 
-// ── Session helpers ────────────────────────────────────────────────────
+// ── Session helpers ───────────────────────────────────────────────────
 async function startSession() {
   startCapture();
   await startTracking(employeeData);
   startTaskAgent(employeeData.id, employeeData.token);
   await blockEverything();
+  startTamperWatcher();
   console.log(`✅ Session started: ${employeeData.name}`);
 }
 
 async function stopSession() {
   stopCapture();
+  stopTamperWatcher();
   await stopTracking();
   stopTaskAgent();
   unblockEverything();
   console.log("🛑 Session stopped");
 }
 
-// ── IPC ────────────────────────────────────────────────────────────────
+// ── IPC ───────────────────────────────────────────────────────────────
 ipcMain.on("do-login", async (event, { email, pwd }) => {
   try {
     console.log("🔐 Login:", email, "→", BACKEND);
@@ -425,9 +515,17 @@ ipcMain.on("employee-logout", async () => {
   createLoginWindow();
 });
 
-// ── App lifecycle ──────────────────────────────────────────────────────
+// ── App lifecycle ─────────────────────────────────────────────────────
 app.whenReady().then(async () => {
   initPaths();
+
+  // Auto admin relaunch
+  if (!isRunningAsAdmin()) {
+    console.log("⚠️  Admin rights nahi — restarting as Administrator...");
+    relaunchAsAdmin();
+    return;
+  }
+
   checkAdminPrivileges();
 
   const saved = loadSavedToken();

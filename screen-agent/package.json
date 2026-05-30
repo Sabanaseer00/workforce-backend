@@ -6,18 +6,64 @@
   "type": "module",
   "scripts": {
     "start": "electron .",
-    "dev":   "electron ."
+    "dev": "electron .",
+    "build": "electron-builder --win --x64",
+    "build:dir": "electron-builder --win --x64 --dir"
   },
   "dependencies": {
-    "active-win":         "^8.2.1",
-    "axios":              "^1.15.2",
-    "dotenv":             "^16.4.5",
+    "active-win": "^8.2.1",
+    "axios": "^1.15.2",
+    "dotenv": "^16.4.5",
     "screenshot-desktop": "^1.0.0",
-    "sharp":              "^0.34.5",
-    "socket.io-client":   "^4.8.3",
-    "uiohook-napi":       "^1.5.2"
+    "sharp": "^0.34.5",
+    "socket.io-client": "^4.8.3",
+    "uiohook-napi": "^1.5.2"
   },
   "devDependencies": {
-    "electron": "^41.3.0"
+    "electron": "^41.3.0",
+    "electron-builder": "^25.1.8",
+    "png-to-ico": "^3.0.1"
+  },
+  "build": {
+    "appId": "com.worktrack.agent",
+    "productName": "WorkTrack Agent",
+    "copyright": "Copyright © 2026 WorkTrack",
+    "files": [
+      "index.js",
+      "activity.js",
+      "taskTracker.js",
+      "taskWidget.html",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "extraResources": [],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "WorkTrack Agent",
+      "runAfterFinish": true,
+      "perMachine": true
+    },
+    "directories": {
+      "output": "dist"
+    }
   }
 }

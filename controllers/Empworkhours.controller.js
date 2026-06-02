@@ -3,6 +3,7 @@
 //  Employee apne work hours dekhta hai
 // ═══════════════════════════════════════════════════════
 import Activity from "../models/Activity.js";
+import mongoose from "mongoose";
 
 function getDateFilter(range) {
   const now   = new Date();
@@ -22,7 +23,8 @@ export const getMyWorkHours = async (req, res) => {
   try {
     const { range = "today" } = req.query;
 
-    const filter = { employeeId: req.user._id };
+    const empId = new mongoose.Types.ObjectId(String(req.user._id));
+    const filter = { employeeId: empId };
     const df = getDateFilter(range);
     if (df) filter.createdAt = df;
 
@@ -70,8 +72,8 @@ export const getMyWorkHours = async (req, res) => {
     const afterMins = totalMins - workMins;
 
     res.json({
-      hourly,  // Array[24] — mins per hour
-      daily,   // Array — daily summaries
+      hourly,
+      daily,
       stats: { totalMins, workMins, afterMins, avgPct },
     });
   } catch (err) {
